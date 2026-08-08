@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  ferreromed-mcp:
+    build:
+      context: ..
+      dockerfile: ferreromed_mcp/Dockerfile
+    container_name: ferreromed-mcp
+    environment:
+      FERREROMED_API_BASE_URL: https://ferreromed.ditra.io
+      FERREROMED_GATEWAY_MODE: hybrid
+      FERREROMED_GATEWAY_ROUTE_POLICY: local_preferred
+      FERREROMED_GATEWAY_MOUNT_ON_STARTUP: "true"
+      FERREROMED_GATEWAY_ALLOW_DIRECT_CALLS: "true"
+      FERREROMED_GATEWAY_TOOLBOX_HOST: toolbox
+      FERREROMED_GATEWAY_TOOLBOX_PORT: "5000"
+      FASTMCP_STATELESS_HTTP: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - toolbox
+    networks:
+      - mcp-net
+
+  toolbox:
+    image: your-registry/toolbox-mcp:latest
+    container_name: toolbox
+    expose:
+      - "5000"
+    networks:
+      - mcp-net
+
+networks:
+  mcp-net:
+    driver: bridge

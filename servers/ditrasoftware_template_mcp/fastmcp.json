@@ -1,0 +1,76 @@
+{
+  "name": "ditrasoftware-template-mcp",
+  "version": "0.1.0",
+  "description": "DitraSoftware Template MCP - Base scaffolding for domain-specific MCP implementations",
+  "env": {
+    "DITRASOFTWARE_API_BASE_URL": {
+      "description": "Base URL for DitraSoftware REST API (e.g. https://api.example.com)",
+      "required": false
+    },
+    "DITRASOFTWARE_API_TIMEOUT_SECONDS": {
+      "description": "HTTP request timeout in seconds",
+      "required": false,
+      "default": "30"
+    },
+    "DITRASOFTWARE_VERIFY_SSL": {
+      "description": "Verify SSL certificates (true/false)",
+      "required": false,
+      "default": "true"
+    },
+    "DITRASOFTWARE_DEFAULT_API_KEY": {
+      "description": "Default API key for REST backend (used as fallback when no token provided)",
+      "required": false
+    },
+    "DITRASOFTWARE_GATEWAY_MODE": {
+      "description": "Gateway mode: hybrid|local|remote",
+      "required": false,
+      "default": "hybrid"
+    },
+    "DITRASOFTWARE_GATEWAY_ROUTE_POLICY": {
+      "description": "Gateway routing policy: local_preferred|remote_preferred",
+      "required": false,
+      "default": "local_preferred"
+    },
+    "DITRASOFTWARE_GATEWAY_MOUNT_ON_STARTUP": {
+      "description": "Auto-mount remote MCPs on startup",
+      "required": false,
+      "default": "true"
+    },
+    "DITRASOFTWARE_GATEWAY_ALLOW_DIRECT_CALLS": {
+      "description": "Allow direct remote tool calls via gateway_call_remote_tool",
+      "required": false,
+      "default": "true"
+    },
+    "DITRASOFTWARE_GATEWAY_DIRECT_RESULT_STRATEGY": {
+      "description": "Result handling strategy for direct remote calls: passthrough|normalized",
+      "required": false,
+      "default": "passthrough"
+    },
+    "DITRASOFTWARE_GATEWAY_REMOTES_JSON": {
+      "description": "Remote MCP backends JSON (array of {name, namespace, type, url, ...})",
+      "required": false
+    },
+    "DITRASOFTWARE_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON": {
+      "description": "Tool routing overrides JSON (object of tool_name -> 'local'|'remote')",
+      "required": false
+    },
+    "DITRASOFTWARE_CACHE_TTL": {
+      "description": "Response cache time-to-live in seconds (FastMCP 4.0.0+, SEP-2549). Hint for clients to cache lists and resources.",
+      "required": false
+    },
+    "DITRASOFTWARE_CACHE_SCOPE": {
+      "description": "Cache scope: public (shared across auth contexts) | private (per-auth context only). Requires CACHE_TTL.",
+      "required": false,
+      "default": "private"
+    },
+    "DITRASOFTWARE_LIST_PAGE_SIZE": {
+      "description": "Maximum items per page for tool/resource lists. Enables pagination for large catalogs.",
+      "required": false
+    },
+    "DITRASOFTWARE_MASK_ERROR_DETAILS": {
+      "description": "Mask internal error details in responses (true/false). Recommended for production.",
+      "required": false,
+      "default": "false"
+    }
+  }
+}

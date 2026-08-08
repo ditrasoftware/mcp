@@ -1,0 +1,80 @@
+{
+  "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
+  "name": "ferreromed-mcp",
+  "version": "0.1.0",
+  "description": "FerreroMed MCP - Medical inventory and order management with gateway support",
+  "source": {
+    "path": "server.py"
+  },
+  "env": {
+    "FERREROMED_API_BASE_URL": {
+      "description": "Base URL for FerreroMed REST API (e.g. https://api.example.com)",
+      "required": false
+    },
+    "FERREROMED_API_TIMEOUT_SECONDS": {
+      "description": "HTTP request timeout in seconds",
+      "required": false,
+      "default": "30"
+    },
+    "FERREROMED_VERIFY_SSL": {
+      "description": "Verify SSL certificates (true/false)",
+      "required": false,
+      "default": "true"
+    },
+    "FERREROMED_DEFAULT_API_KEY": {
+      "description": "Default API key for REST backend (used as fallback when no token provided)",
+      "required": false
+    },
+    "FERREROMED_GATEWAY_MODE": {
+      "description": "Gateway mode: hybrid|local|remote",
+      "required": false,
+      "default": "hybrid"
+    },
+    "FERREROMED_GATEWAY_ROUTE_POLICY": {
+      "description": "Gateway routing policy: local_preferred|remote_preferred",
+      "required": false,
+      "default": "local_preferred"
+    },
+    "FERREROMED_GATEWAY_MOUNT_ON_STARTUP": {
+      "description": "Auto-mount remote MCPs on startup",
+      "required": false,
+      "default": "true"
+    },
+    "FERREROMED_GATEWAY_ALLOW_DIRECT_CALLS": {
+      "description": "Allow direct remote tool calls via gateway_call_remote_tool",
+      "required": false,
+      "default": "true"
+    },
+    "FERREROMED_GATEWAY_DIRECT_RESULT_STRATEGY": {
+      "description": "Result handling strategy for direct remote calls: passthrough|normalized",
+      "required": false,
+      "default": "passthrough"
+    },
+    "FERREROMED_GATEWAY_REMOTES_JSON": {
+      "description": "Remote MCP backends JSON (array of {name, namespace, type, url, ...})",
+      "required": false
+    },
+    "FERREROMED_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON": {
+      "description": "Tool routing overrides JSON (object of tool_name -> 'local'|'remote')",
+      "required": false
+    },
+    "FERREROMED_CACHE_TTL": {
+      "description": "Response cache time-to-live in seconds (FastMCP 4.0.0+, SEP-2549). Hint for clients to cache lists and resources.",
+      "required": false
+    },
+    "FERREROMED_CACHE_SCOPE": {
+      "description": "Cache scope: public (shared across auth contexts) | private (per-auth context only). Requires CACHE_TTL.",
+      "required": false,
+      "default": "private"
+    },
+    "FERREROMED_LIST_PAGE_SIZE": {
+      "description": "Maximum items per page for tool/resource lists. Enables pagination for large catalogs.",
+      "required": false
+    },
+    "FERREROMED_MASK_ERROR_DETAILS": {
+      "description": "Mask internal error details in responses (true/false). Recommended for production.",
+      "required": false,
+      "default": "false"
+    }
+  }
+}

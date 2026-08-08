@@ -1,0 +1,94 @@
+services:
+  # Classic FerreroMed REST API (unchanged)
+  ferreromed_ditra:
+    image: gcr.io/oxytrack-322814/ditra-ferreromed-api:1.4.9
+    container_name: ditra-ferreromed-api
+    ports:
+      - "8091:8091"
+    environment:
+      - VIRTUAL_HOST=ferreromed.ditra.io
+    command: >
+      python main.py
+      --host 0.0.0.0
+      --port 8091
+    volumes:
+      - ./.env:/app/.env
+    restart: always
+    networks:
+      - ferreromed_api_default
+
+  # New FastMCP server (HTTP MCP transport)
+  ferreromed_mcp:
+    # Deployment uses a prebuilt image from GCR. Override if needed:
+    #   export FERREROMED_MCP_IMAGE=gcr.io/oxytrack-322814/ditra-ferreromed-mcp:1.4.9
+    image: ${FERREROMED_MCP_IMAGE:-gcr.io/oxytrack-322814/ditra-ferreromed-mcp:1.4.9}
+    pull_policy: always
+    container_name: ferreromed-mcp
+    depends_on:
+      - ferreromed_ditra
+    environment:
+      # MCP server will call the REST container over Docker networking
+      - FERREROMED_API_BASE_URL=http://ferreromed_ditra:8091
+
+      # Gateway defaults (local + remote orchestration)
+      - FERREROMED_GATEWAY_MODE=hybrid
+      - FERREROMED_GATEWAY_ROUTE_POLICY=local_preferred
+      - FERREROMED_GATEWAY_MOUNT_ON_STARTUP=true
+      - FERREROMED_GATEWAY_ALLOW_DIRECT_CALLS=true
+      - FERREROMED_GATEWAY_DIRECT_RESULT_STRATEGY=passthrough
+      - FERREROMED_GATEWAY_ENABLE_TOOLBOX=true
+      - FERREROMED_GATEWAY_TOOLBOX_HOST=toolbox
+      - FERREROMED_GATEWAY_TOOLBOX_PORT=5000
+      - FERREROMED_GATEWAY_TOOLBOX_INIT_TIMEOUT_MS=20000
+      - FERREROMED_GATEWAY_TOOLBOX_TIMEOUT_MS=60000
+      - FERREROMED_GATEWAY_TOOLBOX_SERVER_INSTRUCTIONS=true
+      # Optional per-tool routing overrides, example:
+      # - FERREROMED_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON={"orders_list":"remote"}
+      # Optional full remote override JSON, example:
+      # - FERREROMED_GATEWAY_REMOTES_JSON=[{"name":"toolbox-mssql","namespace":"toolbox_mssql","type":"streamable-http","url":"http://toolbox:5000/mcp/mssql","initTimeout":20000,"timeout":60000,"serverInstructions":true,"enabled":true}]
+
+      # Safe auth profiles (choose one strategy)
+      #
+      # Profile A (default, recommended for resilience/scalability):
+      # server-side API key injection. Clients can still send Authorization Bearer,
+      # but MCP has a stable fallback key for backend calls.
+      - FERREROMED_DEFAULT_API_KEY=${FERREROMED_API_KEY}
+      #
+      # Profile B (strict bearer-only, no server-side key injection):
+      # comment out FERREROMED_DEFAULT_API_KEY above and ensure clients always
+      # send Authorization: Bearer <token>.
+      # - FERREROMED_DEFAULT_API_KEY=
+      #
+      # Headers supported by the MCP server: Authorization: Bearer <token>
+      # and X-Api-Key: <api-key>
+
+      # FastMCP HTTP settings (Streamable HTTP)
+      - FASTMCP_HOST=0.0.0.0
+      - FASTMCP_PORT=8001
+      - FASTMCP_STREAMABLE_HTTP_PATH=/mcp
+      - FASTMCP_STATELESS_HTTP=true
+
+      # Optional: enable OAuth/JWT verification at the MCP layer using Supabase Auth.
+      # This helps OAuth-capable MCP clients send Authorization: Bearer <token> automatically.
+      # - FERREROMED_MCP_AUTH_MODE=supabase
+      # - FERREROMED_MCP_BASE_URL=https://ferreromed.ditra.io
+      # - SUPABASE_PROJECT_URL=https://<project>.supabase.co
+      # If your Supabase tokens are HS256 (shared secret), also set one of:
+      # - SUPABASE_JWT_ALGORITHM=HS256
+      # - SUPABASE_JWT_SECRET=...
+      # If issuer differs (host/port), optionally set:
+      # - SUPABASE_JWT_ISSUER=https://supabase.oxytrack.io/auth/v1,https://supabase.oxytrack.io:8000/auth/v1
+
+    # Expose MCP on a separate host port for easy reverse-proxy routing.
+    # Suggested Nginx mapping (on the VM):
+    #   location ^~ /mcp { proxy_pass http://127.0.0.1:8093; }
+    ports:
+      - "8093:8001"
+    restart: always
+    networks:
+      - ferreromed_api_default
+
+networks:
+  ferreromed_api_default:
+    external: true
+    name: ferreromed_api_default
