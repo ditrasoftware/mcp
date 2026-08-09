@@ -1,11 +1,11 @@
-version: "3.8"
-
-# Purpose: MCP-focused local/dev compose for AnticaFarmacia.
-# Use this file when iterating locally with a local build context.
+# Purpose: deployment-oriented compose for AnticaFarmacia MCP.
+# Use this file when running prebuilt images and shared external networking.
 services:
-  anticafarmacia-mcp:
-    build: .
-    container_name: anticafarmacia-mcp-dev
+  anticafarmacia_mcp:
+    # Deployment image built by build.sh (TAG=1.0.0)
+    image: ${ANTICAFARMACIA_MCP_IMAGE:-gcr.io/oxytrack-322814/ditra-anticafarmacia-mcp:1.0.0}
+    pull_policy: always
+    container_name: anticafarmacia-mcp
     environment:
       # Base API settings
       ANTICAFARMACIA_API_BASE_URL: ${ANTICAFARMACIA_API_BASE_URL:-}
@@ -20,10 +20,21 @@ services:
       ANTICAFARMACIA_GATEWAY_ALLOW_DIRECT_CALLS: ${ANTICAFARMACIA_GATEWAY_ALLOW_DIRECT_CALLS:-true}
       ANTICAFARMACIA_GATEWAY_DIRECT_RESULT_STRATEGY: ${ANTICAFARMACIA_GATEWAY_DIRECT_RESULT_STRATEGY:-passthrough}
       ANTICAFARMACIA_GATEWAY_ENABLE_TOOLBOX: ${ANTICAFARMACIA_GATEWAY_ENABLE_TOOLBOX:-false}
-      ANTICAFARMACIA_GATEWAY_REMOTES_JSON: ${ANTICAFARMACIA_GATEWAY_REMOTES_JSON:-}
+      # URL used by the default remote JSON below. Override per environment if needed.
+      GOOGLE_WORKSPACE_MCP_URL: ${GOOGLE_WORKSPACE_MCP_URL:-https://workspace.dchat.ditra.app/mcp}
+      # Optional explicit bearer token for OAuth-protected remote MCPs.
+      GOOGLE_WORKSPACE_MCP_BEARER_TOKEN: ${GOOGLE_WORKSPACE_MCP_BEARER_TOKEN:-}
+      # Optional OAuth refresh flow for seamless token rotation (used when bearer token is empty).
+      GOOGLE_WORKSPACE_MCP_OAUTH_TOKEN_ENDPOINT: ${GOOGLE_WORKSPACE_MCP_OAUTH_TOKEN_ENDPOINT:-https://workspace.dchat.ditra.app/token}
+      GOOGLE_WORKSPACE_MCP_OAUTH_CLIENT_ID: ${GOOGLE_WORKSPACE_MCP_OAUTH_CLIENT_ID:-}
+      GOOGLE_WORKSPACE_MCP_OAUTH_CLIENT_SECRET: ${GOOGLE_WORKSPACE_MCP_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_WORKSPACE_MCP_OAUTH_REFRESH_TOKEN: ${GOOGLE_WORKSPACE_MCP_OAUTH_REFRESH_TOKEN:-}
+      GOOGLE_WORKSPACE_MCP_OAUTH_SCOPE: ${GOOGLE_WORKSPACE_MCP_OAUTH_SCOPE:-}
+      GOOGLE_WORKSPACE_MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHOD: ${GOOGLE_WORKSPACE_MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHOD:-client_secret_basic}
+      ANTICAFARMACIA_GATEWAY_REMOTES_JSON: '${ANTICAFARMACIA_GATEWAY_REMOTES_JSON:-[{"name":"google-workspace-mcp","namespace":"google_workspace_mcp","type":"streamable-http","url":"${GOOGLE_WORKSPACE_MCP_URL:-https://workspace.dchat.ditra.app/mcp}","auth":"${GOOGLE_WORKSPACE_MCP_BEARER_TOKEN:-__auto__}","initTimeout":20000,"timeout":60000,"serverInstructions":true,"enabled":true}]}'
       ANTICAFARMACIA_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON: ${ANTICAFARMACIA_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON:-}
 
-      # FastMCP settings
+      # FastMCP HTTP settings
       FASTMCP_HOST: ${FASTMCP_HOST:-0.0.0.0}
       FASTMCP_PORT: ${FASTMCP_PORT:-8002}
       FASTMCP_STREAMABLE_HTTP_PATH: ${FASTMCP_STREAMABLE_HTTP_PATH:-/mcp}
@@ -44,5 +55,15 @@ services:
       ANTICAFARMACIA_OIDC_TOKEN_ENDPOINT_AUTH_METHOD: ${ANTICAFARMACIA_OIDC_TOKEN_ENDPOINT_AUTH_METHOD:-client_secret_post}
 
     ports:
-      - "${ANTICAFARMACIA_MCP_HOST_PORT:-8094}:8002"
-    restart: unless-stopped
+      - "${ANTICAFARMACIA_MCP_HOST_PORT:-8094}:${FASTMCP_PORT:-8002}"
+
+    networks:
+      - default
+      - ditra-shared
+
+    restart: always
+
+networks:
+  ditra-shared:
+    external: true
+    name: ditra-shared

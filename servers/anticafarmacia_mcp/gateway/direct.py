@@ -7,6 +7,12 @@ from typing import Any
 from fastmcp import Client
 
 from ..settings import GatewaySettings, RemoteBackendSettings
+from .remote_auth import (
+    GatewayAuthConfigurationError,
+    is_refresh_flow_configured,
+    resolve_remote_auth,
+    resolve_remote_auth_force_refresh,
+)
 
 
 def _dump_content_block(block: Any) -> dict[str, Any]:
@@ -86,6 +92,84 @@ def list_remote_tool_names(gateway: GatewaySettings) -> list[str]:
     return names
 
 
+def _looks_like_auth_failure(exc: Exception) -> bool:
+    text = str(exc).lower()
+    hints = (
+        "401",
+        "403",
+        "unauthorized",
+        "forbidden",
+        "invalid_token",
+        "insufficient_scope",
+        "www-authenticate",
+        "bearer",
+    )
+    return any(h in text for h in hints)
+
+
+def _raise_auth_diagnostic(remote: RemoteBackendSettings, *, action: str, exc: Exception) -> None:
+    text = str(exc)
+    lowered = text.lower()
+
+    if "insufficient_scope" in lowered or "scope" in lowered:
+        raise RuntimeError(
+            f"Remote auth failed during {action} for {remote.name}: insufficient OAuth scope. "
+            "Update GOOGLE_WORKSPACE_MCP_OAUTH_SCOPE to include required Google scopes, "
+            "re-run OAuth bootstrap, then retry. Original error: "
+            f"{text}"
+        ) from exc
+
+    if _looks_like_auth_failure(exc):
+        raise RuntimeError(
+            f"Remote auth failed during {action} for {remote.name}: token rejected or expired. "
+            "Check GOOGLE_WORKSPACE_MCP_BEARER_TOKEN or refresh-token settings, then refresh token. "
+            f"Original error: {text}"
+        ) from exc
+
+    raise RuntimeError(f"Remote call failed during {action} for {remote.name}: {text}") from exc
+
+
+async def _call_with_client(
+    remote: RemoteBackendSettings,
+    *,
+    auth: str | None,
+    operation: Any,
+) -> Any:
+    client_kwargs: dict[str, Any] = {
+        "timeout": max(remote.timeout_ms / 1000.0, 1.0),
+    }
+    if auth:
+        client_kwargs["auth"] = auth
+
+    async with Client(remote.url, **client_kwargs) as client:
+        return await operation(client)
+
+
+async def _execute_remote_operation(
+    remote: RemoteBackendSettings,
+    *,
+    action: str,
+    operation: Any,
+) -> Any:
+    try:
+        auth = await resolve_remote_auth(remote)
+    except GatewayAuthConfigurationError as exc:
+        raise RuntimeError(f"Remote auth configuration error for {remote.name}: {exc}") from exc
+
+    try:
+        return await _call_with_client(remote, auth=auth, operation=operation)
+    except Exception as exc:
+        can_retry = _looks_like_auth_failure(exc) and is_refresh_flow_configured(remote)
+        if can_retry:
+            try:
+                refreshed_auth = await resolve_remote_auth_force_refresh(remote)
+                return await _call_with_client(remote, auth=refreshed_auth, operation=operation)
+            except Exception as retry_exc:
+                _raise_auth_diagnostic(remote, action=action, exc=retry_exc)
+
+        _raise_auth_diagnostic(remote, action=action, exc=exc)
+
+
 async def list_remote_tools(
     gateway: GatewaySettings,
     *,
@@ -99,11 +183,17 @@ async def list_remote_tools(
     if remote.type != "streamable-http":
         raise ValueError(f"Unsupported remote type for listing tools: {remote.type}")
 
-    async with Client(remote.url, timeout=max(remote.timeout_ms / 1000.0, 1.0)) as client:
+    async def _op(client: Client) -> list[Any]:
         list_tools = getattr(client, "list_tools", None)
         if not callable(list_tools):
             return []
-        tools = await list_tools()
+        return await list_tools()
+
+    tools = await _execute_remote_operation(
+        remote,
+        action="list_tools",
+        operation=_op,
+    )
 
     names: list[str] = []
     for tool in tools or []:
@@ -129,15 +219,23 @@ async def probe_remote_backend(
     started = time.perf_counter()
     tool_names: list[str] = []
     supports_list_tools = False
-    async with Client(remote.url, timeout=max(remote.timeout_ms / 1000.0, 1.0)) as client:
+    async def _op(client: Client) -> list[Any]:
+        nonlocal supports_list_tools
         list_tools = getattr(client, "list_tools", None)
-        if callable(list_tools):
-            supports_list_tools = True
-            tools = await list_tools()
-            for tool in tools or []:
-                name = getattr(tool, "name", None)
-                if isinstance(name, str) and name:
-                    tool_names.append(name)
+        if not callable(list_tools):
+            return []
+        supports_list_tools = True
+        return await list_tools()
+
+    tools = await _execute_remote_operation(
+        remote,
+        action="health_probe",
+        operation=_op,
+    )
+    for tool in tools or []:
+        name = getattr(tool, "name", None)
+        if isinstance(name, str) and name:
+            tool_names.append(name)
     latency_ms = int((time.perf_counter() - started) * 1000)
 
     return {
@@ -170,8 +268,14 @@ async def call_remote_tool_direct(
     if remote.type != "streamable-http":
         raise ValueError(f"Unsupported remote type for direct call: {remote.type}")
 
-    async with Client(remote.url, timeout=max(remote.timeout_ms / 1000.0, 1.0)) as client:
-        result = await client.call_tool(tool_name, arguments or {})
+    async def _op(client: Client) -> Any:
+        return await client.call_tool(tool_name, arguments or {})
+
+    result = await _execute_remote_operation(
+        remote,
+        action=f"call_tool:{tool_name}",
+        operation=_op,
+    )
 
     # Default behavior is true pass-through fidelity so downstream MCP semantics
     # remain intact unless wrapper behavior is explicitly requested.

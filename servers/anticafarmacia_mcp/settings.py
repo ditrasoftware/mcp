@@ -11,6 +11,7 @@ class RemoteBackendSettings:
     namespace: str
     type: str
     url: str
+    auth: str | None = None
     init_timeout_ms: int = 20000
     timeout_ms: int = 60000
     server_instructions: bool = True
@@ -158,7 +159,7 @@ class FerreroMedSettings:
     verify_ssl: bool = True
     default_api_key: str | None = None
     cache_ttl: int | None = None
-    cache_scope: str = "private"
+    cache_scope: str | None = None
     list_page_size: int | None = None
     mask_error_details: bool = False
     gateway: GatewaySettings = GatewaySettings()
@@ -177,6 +178,11 @@ class FerreroMedSettings:
     compliance: ComplianceSettings = ComplianceSettings()
 
 
+# Backward-compatible alias while this module is being renamed from template code.
+AnticaFarmaciaSettings = FerreroMedSettings
+DitraSoftwareSettings = FerreroMedSettings
+
+
 def _get_bool_env(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -186,6 +192,31 @@ def _get_bool_env(name: str, default: bool) -> bool:
 
 def _get_int_env(name: str, default: int) -> int:
     raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _get_first_set_env(*names: str) -> str | None:
+    for name in names:
+        raw = os.getenv(name)
+        if raw is not None:
+            return raw
+    return None
+
+
+def _get_bool_env_alias(primary: str, fallback: str, default: bool) -> bool:
+    raw = _get_first_set_env(primary, fallback)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _get_int_env_alias(primary: str, fallback: str, default: int) -> int:
+    raw = (_get_first_set_env(primary, fallback) or "").strip()
     if not raw:
         return default
     try:
@@ -212,7 +243,13 @@ def _coerce_positive_int(value: int | str | None) -> int | None:
 
 
 def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | None:
-    raw = (os.getenv("FERREROMED_GATEWAY_REMOTES_JSON") or "").strip()
+    raw = (
+        _get_first_set_env(
+            "ANTICAFARMACIA_GATEWAY_REMOTES_JSON",
+            "FERREROMED_GATEWAY_REMOTES_JSON",
+        )
+        or ""
+    ).strip()
     if not raw:
         return None
 
@@ -235,6 +272,8 @@ def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | Non
         if not name or not namespace or not url:
             continue
 
+        auth = str(item.get("auth") or "").strip() or None
+
         init_timeout_ms = int(item.get("initTimeout", 20000) or 20000)
         timeout_ms = int(item.get("timeout", 60000) or 60000)
         server_instructions = bool(item.get("serverInstructions", True))
@@ -247,6 +286,7 @@ def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | Non
                 namespace=namespace,
                 type=remote_type,
                 url=url,
+                auth=auth,
                 init_timeout_ms=init_timeout_ms,
                 timeout_ms=timeout_ms,
                 server_instructions=server_instructions,
@@ -258,7 +298,13 @@ def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | Non
 
 
 def _parse_tool_route_overrides_from_env() -> tuple[tuple[str, str], ...]:
-    raw = (os.getenv("FERREROMED_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON") or "").strip()
+    raw = (
+        _get_first_set_env(
+            "ANTICAFARMACIA_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON",
+            "FERREROMED_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON",
+        )
+        or ""
+    ).strip()
     if not raw:
         return ()
 
@@ -283,12 +329,38 @@ def _parse_tool_route_overrides_from_env() -> tuple[tuple[str, str], ...]:
 
 
 def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
-    enabled = _get_bool_env("FERREROMED_GATEWAY_ENABLE_TOOLBOX", True)
-    host = (os.getenv("FERREROMED_GATEWAY_TOOLBOX_HOST") or "toolbox").strip() or "toolbox"
-    port = _get_int_env("FERREROMED_GATEWAY_TOOLBOX_PORT", 5000)
-    init_timeout_ms = _get_int_env("FERREROMED_GATEWAY_TOOLBOX_INIT_TIMEOUT_MS", 20000)
-    timeout_ms = _get_int_env("FERREROMED_GATEWAY_TOOLBOX_TIMEOUT_MS", 60000)
-    server_instructions = _get_bool_env("FERREROMED_GATEWAY_TOOLBOX_SERVER_INSTRUCTIONS", True)
+    enabled = _get_bool_env_alias(
+        "ANTICAFARMACIA_GATEWAY_ENABLE_TOOLBOX",
+        "FERREROMED_GATEWAY_ENABLE_TOOLBOX",
+        True,
+    )
+    host = (
+        _get_first_set_env(
+            "ANTICAFARMACIA_GATEWAY_TOOLBOX_HOST",
+            "FERREROMED_GATEWAY_TOOLBOX_HOST",
+        )
+        or "toolbox"
+    ).strip() or "toolbox"
+    port = _get_int_env_alias(
+        "ANTICAFARMACIA_GATEWAY_TOOLBOX_PORT",
+        "FERREROMED_GATEWAY_TOOLBOX_PORT",
+        5000,
+    )
+    init_timeout_ms = _get_int_env_alias(
+        "ANTICAFARMACIA_GATEWAY_TOOLBOX_INIT_TIMEOUT_MS",
+        "FERREROMED_GATEWAY_TOOLBOX_INIT_TIMEOUT_MS",
+        20000,
+    )
+    timeout_ms = _get_int_env_alias(
+        "ANTICAFARMACIA_GATEWAY_TOOLBOX_TIMEOUT_MS",
+        "FERREROMED_GATEWAY_TOOLBOX_TIMEOUT_MS",
+        60000,
+    )
+    server_instructions = _get_bool_env_alias(
+        "ANTICAFARMACIA_GATEWAY_TOOLBOX_SERVER_INSTRUCTIONS",
+        "FERREROMED_GATEWAY_TOOLBOX_SERVER_INSTRUCTIONS",
+        True,
+    )
 
     return (
         RemoteBackendSettings(
@@ -296,6 +368,7 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
             namespace="toolbox_mssql",
             type="streamable-http",
             url=f"http://{host}:{port}/mcp/mssql",
+            auth=None,
             init_timeout_ms=init_timeout_ms,
             timeout_ms=timeout_ms,
             server_instructions=server_instructions,
@@ -306,6 +379,7 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
             namespace="toolbox_mysql",
             type="streamable-http",
             url=f"http://{host}:{port}/mcp/mysql",
+            auth=None,
             init_timeout_ms=init_timeout_ms,
             timeout_ms=timeout_ms,
             server_instructions=server_instructions,
@@ -315,15 +389,38 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
 
 
 def _build_gateway_settings() -> GatewaySettings:
-    mode = (os.getenv("FERREROMED_GATEWAY_MODE") or "hybrid").strip().lower() or "hybrid"
+    mode = (
+        _get_first_set_env("ANTICAFARMACIA_GATEWAY_MODE", "FERREROMED_GATEWAY_MODE")
+        or "hybrid"
+    ).strip().lower() or "hybrid"
     route_policy = (
-        (os.getenv("FERREROMED_GATEWAY_ROUTE_POLICY") or "local_preferred").strip().lower()
+        (
+            _get_first_set_env(
+                "ANTICAFARMACIA_GATEWAY_ROUTE_POLICY",
+                "FERREROMED_GATEWAY_ROUTE_POLICY",
+            )
+            or "local_preferred"
+        ).strip().lower()
         or "local_preferred"
     )
-    mount_on_startup = _get_bool_env("FERREROMED_GATEWAY_MOUNT_ON_STARTUP", True)
-    allow_direct_calls = _get_bool_env("FERREROMED_GATEWAY_ALLOW_DIRECT_CALLS", True)
+    mount_on_startup = _get_bool_env_alias(
+        "ANTICAFARMACIA_GATEWAY_MOUNT_ON_STARTUP",
+        "FERREROMED_GATEWAY_MOUNT_ON_STARTUP",
+        True,
+    )
+    allow_direct_calls = _get_bool_env_alias(
+        "ANTICAFARMACIA_GATEWAY_ALLOW_DIRECT_CALLS",
+        "FERREROMED_GATEWAY_ALLOW_DIRECT_CALLS",
+        True,
+    )
     direct_result_strategy = (
-        (os.getenv("FERREROMED_GATEWAY_DIRECT_RESULT_STRATEGY") or "passthrough")
+        (
+            _get_first_set_env(
+                "ANTICAFARMACIA_GATEWAY_DIRECT_RESULT_STRATEGY",
+                "FERREROMED_GATEWAY_DIRECT_RESULT_STRATEGY",
+            )
+            or "passthrough"
+        )
         .strip()
         .lower()
     ) or "passthrough"
@@ -566,7 +663,7 @@ def _build_compliance_settings() -> ComplianceSettings:
     )
 
 
-def get_settings() -> FerreroMedSettings:
+def get_settings() -> AnticaFarmaciaSettings:
     api_base_url = (os.getenv("FERREROMED_API_BASE_URL") or "").strip().rstrip("/")
     # NOTE: We intentionally allow this to be empty so the Prefab UI can still
     # render in environments where the REST backend is not configured.
@@ -587,9 +684,10 @@ def get_settings() -> FerreroMedSettings:
     
     # Response caching configuration (FastMCP 4.0.0+, SEP-2549)
     cache_ttl = _coerce_positive_int(os.getenv("FERREROMED_CACHE_TTL"))
-    cache_scope = (os.getenv("FERREROMED_CACHE_SCOPE") or "private").strip().lower()
-    if cache_scope not in {"public", "private"}:
-        cache_scope = "private"
+    cache_scope: str | None = None
+    if cache_ttl is not None:
+        scope_raw = (os.getenv("FERREROMED_CACHE_SCOPE") or "private").strip().lower()
+        cache_scope = scope_raw if scope_raw in {"public", "private"} else "private"
     
     # Pagination for large listings
     list_page_size = _coerce_positive_int(os.getenv("FERREROMED_LIST_PAGE_SIZE"))
@@ -611,7 +709,7 @@ def get_settings() -> FerreroMedSettings:
     risk_management = _build_risk_management_settings()
     compliance = _build_compliance_settings()
 
-    return FerreroMedSettings(
+    return AnticaFarmaciaSettings(
         api_base_url=api_base_url,
         timeout_seconds=timeout_seconds,
         verify_ssl=verify_ssl,

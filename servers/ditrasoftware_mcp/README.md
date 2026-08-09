@@ -113,8 +113,17 @@ docker run -p 8001:8001 \
 #### Docker Compose
 
 ```bash
-docker-compose -f docker-compose-mcp.yml up -d
+docker compose -f docker-compose-mcp.yml up -d
 ```
+
+### 5. Compose File Roles
+
+- `docker-compose-mcp.yml`
+  - Canonical compose file for this server folder.
+  - MCP-focused local/dev stack using local `build: .`.
+- `docker-compose.yml`
+  - Not present in this folder by design.
+  - Add only when you need a separate deployment-oriented stack (for example, prebuilt image + external networks).
 
 ## Configuration
 

@@ -107,3 +107,10 @@ class AnticaFarmaciaRestClient:
                     f"Failed to parse response as JSON: {e}",
                     status_code=resp.status_code,
                 ) from e
+
+
+# Backward-compatible aliases for template-derived modules.
+FerreroMedAuth = AnticaFarmaciaAuth
+DitraSoftwareAuth = AnticaFarmaciaAuth
+FerreroMedRestClient = AnticaFarmaciaRestClient
+DitraSoftwareRestClient = AnticaFarmaciaRestClient

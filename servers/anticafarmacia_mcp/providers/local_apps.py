@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastmcp import FastMCP
-from fastmcp.server.providers import AppProvider
-
 from ..rest_client import DitraSoftwareRestClient
 from ..settings import DitraSoftwareSettings
 
@@ -12,7 +9,7 @@ from ..settings import DitraSoftwareSettings
 def create_local_app_providers(
     client: DitraSoftwareRestClient,
     settings: DitraSoftwareSettings,
-) -> tuple[list[AppProvider], dict[str, Any]]:
+) -> tuple[list[Any], dict[str, Any]]:
     """Create domain-specific Prefab UI apps.
     
     TODO: Implement your domain-specific UI apps here.
@@ -21,7 +18,7 @@ def create_local_app_providers(
     interact with your tools through a visual console.
     """
     
-    app_providers: list[AppProvider] = []
+    app_providers: list[Any] = []
     local_app_registry: dict[str, Any] = {}
     
     # TODO: Add your domain-specific UI apps below

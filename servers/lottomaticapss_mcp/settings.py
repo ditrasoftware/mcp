@@ -11,6 +11,7 @@ class RemoteBackendSettings:
     namespace: str
     type: str
     url: str
+    auth: str | None = None
     init_timeout_ms: int = 20000
     timeout_ms: int = 60000
     server_instructions: bool = True
@@ -95,7 +96,7 @@ class RBACSettings:
     """Role-based access control configuration (Phase 3)."""
     enabled: bool = False
     enforce_scopes: bool = False  # Require OAuth scopes for tools
-    scope_prefix: str = "ferreromed:"  # e.g., ferreromed:inventory:read
+    scope_prefix: str = "lottomaticapss:"  # e.g., lottomaticapss:inventory:read
     roles_enabled: bool = False  # Use Auth0 groups as roles
     resource_permissions_enabled: bool = False  # Per-resource RBAC
 
@@ -117,7 +118,7 @@ class MFASettings:
     enabled: bool = False
     enforce_mfa: bool = False
     supported_methods: tuple[str, ...] = ("totp", "sms", "email", "webauthn")
-    totp_issuer: str = "FerreroMed MCP"
+    totp_issuer: str = "Lottomaticapss MCP"
     backup_codes_enabled: bool = True
     grace_period_days: int = 7  # Grace period to enroll MFA
 
@@ -152,13 +153,13 @@ class ComplianceSettings:
 
 
 @dataclass(frozen=True)
-class FerreroMedSettings:
+class LottomaticapssSettings:
     api_base_url: str
     timeout_seconds: float = 30.0
     verify_ssl: bool = True
     default_api_key: str | None = None
     cache_ttl: int | None = None
-    cache_scope: str = "private"
+    cache_scope: str | None = None
     list_page_size: int | None = None
     mask_error_details: bool = False
     gateway: GatewaySettings = GatewaySettings()
@@ -212,7 +213,7 @@ def _coerce_positive_int(value: int | str | None) -> int | None:
 
 
 def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | None:
-    raw = (os.getenv("FERREROMED_GATEWAY_REMOTES_JSON") or "").strip()
+    raw = (os.getenv("LOTTOMATICAPSS_GATEWAY_REMOTES_JSON") or "").strip()
     if not raw:
         return None
 
@@ -235,6 +236,8 @@ def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | Non
         if not name or not namespace or not url:
             continue
 
+        auth = str(item.get("auth") or "").strip() or None
+
         init_timeout_ms = int(item.get("initTimeout", 20000) or 20000)
         timeout_ms = int(item.get("timeout", 60000) or 60000)
         server_instructions = bool(item.get("serverInstructions", True))
@@ -247,6 +250,7 @@ def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | Non
                 namespace=namespace,
                 type=remote_type,
                 url=url,
+                auth=auth,
                 init_timeout_ms=init_timeout_ms,
                 timeout_ms=timeout_ms,
                 server_instructions=server_instructions,
@@ -258,7 +262,7 @@ def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | Non
 
 
 def _parse_tool_route_overrides_from_env() -> tuple[tuple[str, str], ...]:
-    raw = (os.getenv("FERREROMED_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON") or "").strip()
+    raw = (os.getenv("LOTTOMATICAPSS_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON") or "").strip()
     if not raw:
         return ()
 
@@ -283,12 +287,12 @@ def _parse_tool_route_overrides_from_env() -> tuple[tuple[str, str], ...]:
 
 
 def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
-    enabled = _get_bool_env("FERREROMED_GATEWAY_ENABLE_TOOLBOX", True)
-    host = (os.getenv("FERREROMED_GATEWAY_TOOLBOX_HOST") or "toolbox").strip() or "toolbox"
-    port = _get_int_env("FERREROMED_GATEWAY_TOOLBOX_PORT", 5000)
-    init_timeout_ms = _get_int_env("FERREROMED_GATEWAY_TOOLBOX_INIT_TIMEOUT_MS", 20000)
-    timeout_ms = _get_int_env("FERREROMED_GATEWAY_TOOLBOX_TIMEOUT_MS", 60000)
-    server_instructions = _get_bool_env("FERREROMED_GATEWAY_TOOLBOX_SERVER_INSTRUCTIONS", True)
+    enabled = _get_bool_env("LOTTOMATICAPSS_GATEWAY_ENABLE_TOOLBOX", True)
+    host = (os.getenv("LOTTOMATICAPSS_GATEWAY_TOOLBOX_HOST") or "toolbox").strip() or "toolbox"
+    port = _get_int_env("LOTTOMATICAPSS_GATEWAY_TOOLBOX_PORT", 5000)
+    init_timeout_ms = _get_int_env("LOTTOMATICAPSS_GATEWAY_TOOLBOX_INIT_TIMEOUT_MS", 20000)
+    timeout_ms = _get_int_env("LOTTOMATICAPSS_GATEWAY_TOOLBOX_TIMEOUT_MS", 60000)
+    server_instructions = _get_bool_env("LOTTOMATICAPSS_GATEWAY_TOOLBOX_SERVER_INSTRUCTIONS", True)
 
     return (
         RemoteBackendSettings(
@@ -296,6 +300,7 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
             namespace="toolbox_mssql",
             type="streamable-http",
             url=f"http://{host}:{port}/mcp/mssql",
+            auth=None,
             init_timeout_ms=init_timeout_ms,
             timeout_ms=timeout_ms,
             server_instructions=server_instructions,
@@ -306,6 +311,7 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
             namespace="toolbox_mysql",
             type="streamable-http",
             url=f"http://{host}:{port}/mcp/mysql",
+            auth=None,
             init_timeout_ms=init_timeout_ms,
             timeout_ms=timeout_ms,
             server_instructions=server_instructions,
@@ -315,15 +321,15 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
 
 
 def _build_gateway_settings() -> GatewaySettings:
-    mode = (os.getenv("FERREROMED_GATEWAY_MODE") or "hybrid").strip().lower() or "hybrid"
+    mode = (os.getenv("LOTTOMATICAPSS_GATEWAY_MODE") or "hybrid").strip().lower() or "hybrid"
     route_policy = (
-        (os.getenv("FERREROMED_GATEWAY_ROUTE_POLICY") or "local_preferred").strip().lower()
+        (os.getenv("LOTTOMATICAPSS_GATEWAY_ROUTE_POLICY") or "local_preferred").strip().lower()
         or "local_preferred"
     )
-    mount_on_startup = _get_bool_env("FERREROMED_GATEWAY_MOUNT_ON_STARTUP", True)
-    allow_direct_calls = _get_bool_env("FERREROMED_GATEWAY_ALLOW_DIRECT_CALLS", True)
+    mount_on_startup = _get_bool_env("LOTTOMATICAPSS_GATEWAY_MOUNT_ON_STARTUP", True)
+    allow_direct_calls = _get_bool_env("LOTTOMATICAPSS_GATEWAY_ALLOW_DIRECT_CALLS", True)
     direct_result_strategy = (
-        (os.getenv("FERREROMED_GATEWAY_DIRECT_RESULT_STRATEGY") or "passthrough")
+        (os.getenv("LOTTOMATICAPSS_GATEWAY_DIRECT_RESULT_STRATEGY") or "passthrough")
         .strip()
         .lower()
     ) or "passthrough"
@@ -351,19 +357,19 @@ def _build_gateway_settings() -> GatewaySettings:
 
 def _build_oidc_settings() -> OIDCSettings:
     """Build OIDC configuration (Phase 1)."""
-    enabled = _get_bool_env("FERREROMED_AUTH_OIDC_ENABLED", False)
-    mode = (os.getenv("FERREROMED_AUTH_OIDC_MODE") or "oidc_proxy").strip().lower()
-    config_url = (os.getenv("FERREROMED_AUTH_OIDC_CONFIG_URL") or "").strip() or None
-    client_id = (os.getenv("FERREROMED_AUTH_OIDC_CLIENT_ID") or "").strip() or None
-    client_secret = (os.getenv("FERREROMED_AUTH_OIDC_CLIENT_SECRET") or "").strip() or None
-    mcp_base_url = (os.getenv("FERREROMED_AUTH_OIDC_MCP_BASE_URL") or "").strip() or None
+    enabled = _get_bool_env("LOTTOMATICAPSS_AUTH_OIDC_ENABLED", False)
+    mode = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_MODE") or "oidc_proxy").strip().lower()
+    config_url = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_CONFIG_URL") or "").strip() or None
+    client_id = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_CLIENT_ID") or "").strip() or None
+    client_secret = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_CLIENT_SECRET") or "").strip() or None
+    mcp_base_url = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_MCP_BASE_URL") or "").strip() or None
     
-    required_scopes_raw = (os.getenv("FERREROMED_AUTH_OIDC_REQUIRED_SCOPES") or "openid profile email").strip()
+    required_scopes_raw = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_REQUIRED_SCOPES") or "openid profile email").strip()
     required_scopes = tuple(s.strip() for s in required_scopes_raw.split(",") if s.strip())
     
-    allow_api_key_fallback = _get_bool_env("FERREROMED_AUTH_OIDC_ALLOW_API_KEY_FALLBACK", True)
-    verify_id_token = _get_bool_env("FERREROMED_AUTH_OIDC_VERIFY_ID_TOKEN", True)
-    token_endpoint_auth_method = (os.getenv("FERREROMED_AUTH_OIDC_TOKEN_ENDPOINT_AUTH_METHOD") or "client_secret_basic").strip().lower()
+    allow_api_key_fallback = _get_bool_env("LOTTOMATICAPSS_AUTH_OIDC_ALLOW_API_KEY_FALLBACK", True)
+    verify_id_token = _get_bool_env("LOTTOMATICAPSS_AUTH_OIDC_VERIFY_ID_TOKEN", True)
+    token_endpoint_auth_method = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_TOKEN_ENDPOINT_AUTH_METHOD") or "client_secret_basic").strip().lower()
     
     return OIDCSettings(
         enabled=enabled,
@@ -381,18 +387,18 @@ def _build_oidc_settings() -> OIDCSettings:
 
 def _build_audit_settings() -> AuditSettings:
     """Build audit logging configuration (Phase 1)."""
-    enabled = _get_bool_env("FERREROMED_AUDIT_ENABLED", False)
-    destination = (os.getenv("FERREROMED_AUDIT_DESTINATION") or "stdout").strip().lower()
-    cloudwatch_log_group = (os.getenv("FERREROMED_AUDIT_CLOUDWATCH_LOG_GROUP") or "").strip() or None
-    cloudwatch_log_stream = (os.getenv("FERREROMED_AUDIT_CLOUDWATCH_LOG_STREAM") or "").strip() or None
-    elk_endpoint = (os.getenv("FERREROMED_AUDIT_ELK_ENDPOINT") or "").strip() or None
-    splunk_endpoint = (os.getenv("FERREROMED_AUDIT_SPLUNK_ENDPOINT") or "").strip() or None
-    splunk_token = (os.getenv("FERREROMED_AUDIT_SPLUNK_TOKEN") or "").strip() or None
-    log_auth_events = _get_bool_env("FERREROMED_AUDIT_LOG_AUTH_EVENTS", True)
-    log_tool_access = _get_bool_env("FERREROMED_AUDIT_LOG_TOOL_ACCESS", True)
-    log_api_calls = _get_bool_env("FERREROMED_AUDIT_LOG_API_CALLS", False)
-    mask_sensitive_data = _get_bool_env("FERREROMED_AUDIT_MASK_SENSITIVE_DATA", True)
-    retention_days = _get_int_env("FERREROMED_AUDIT_RETENTION_DAYS", 2555)
+    enabled = _get_bool_env("LOTTOMATICAPSS_AUDIT_ENABLED", False)
+    destination = (os.getenv("LOTTOMATICAPSS_AUDIT_DESTINATION") or "stdout").strip().lower()
+    cloudwatch_log_group = (os.getenv("LOTTOMATICAPSS_AUDIT_CLOUDWATCH_LOG_GROUP") or "").strip() or None
+    cloudwatch_log_stream = (os.getenv("LOTTOMATICAPSS_AUDIT_CLOUDWATCH_LOG_STREAM") or "").strip() or None
+    elk_endpoint = (os.getenv("LOTTOMATICAPSS_AUDIT_ELK_ENDPOINT") or "").strip() or None
+    splunk_endpoint = (os.getenv("LOTTOMATICAPSS_AUDIT_SPLUNK_ENDPOINT") or "").strip() or None
+    splunk_token = (os.getenv("LOTTOMATICAPSS_AUDIT_SPLUNK_TOKEN") or "").strip() or None
+    log_auth_events = _get_bool_env("LOTTOMATICAPSS_AUDIT_LOG_AUTH_EVENTS", True)
+    log_tool_access = _get_bool_env("LOTTOMATICAPSS_AUDIT_LOG_TOOL_ACCESS", True)
+    log_api_calls = _get_bool_env("LOTTOMATICAPSS_AUDIT_LOG_API_CALLS", False)
+    mask_sensitive_data = _get_bool_env("LOTTOMATICAPSS_AUDIT_MASK_SENSITIVE_DATA", True)
+    retention_days = _get_int_env("LOTTOMATICAPSS_AUDIT_RETENTION_DAYS", 2555)
     
     return AuditSettings(
         enabled=enabled,
@@ -412,15 +418,15 @@ def _build_audit_settings() -> AuditSettings:
 
 def _build_token_settings() -> TokenSettings:
     """Build token management configuration (Phase 2)."""
-    enabled = _get_bool_env("FERREROMED_AUTH_TOKEN_ENABLED", False)
-    access_token_ttl = _get_int_env("FERREROMED_AUTH_TOKEN_ACCESS_TTL_SECONDS", 3600)
-    refresh_token_ttl = _get_int_env("FERREROMED_AUTH_TOKEN_REFRESH_TTL_SECONDS", 2592000)
-    auto_refresh_buffer = _get_int_env("FERREROMED_AUTH_TOKEN_AUTO_REFRESH_BUFFER_SECONDS", 300)
-    refresh_enabled = _get_bool_env("FERREROMED_AUTH_TOKEN_REFRESH_ENABLED", False)
-    revocation_enabled = _get_bool_env("FERREROMED_AUTH_TOKEN_REVOCATION_ENABLED", False)
-    revocation_check_interval = _get_int_env("FERREROMED_AUTH_TOKEN_REVOCATION_CHECK_INTERVAL_SECONDS", 60)
-    revocation_backend = (os.getenv("FERREROMED_AUTH_TOKEN_REVOCATION_BACKEND") or "memory").strip().lower()
-    redis_url = (os.getenv("FERREROMED_AUTH_TOKEN_REDIS_URL") or "").strip() or None
+    enabled = _get_bool_env("LOTTOMATICAPSS_AUTH_TOKEN_ENABLED", False)
+    access_token_ttl = _get_int_env("LOTTOMATICAPSS_AUTH_TOKEN_ACCESS_TTL_SECONDS", 3600)
+    refresh_token_ttl = _get_int_env("LOTTOMATICAPSS_AUTH_TOKEN_REFRESH_TTL_SECONDS", 2592000)
+    auto_refresh_buffer = _get_int_env("LOTTOMATICAPSS_AUTH_TOKEN_AUTO_REFRESH_BUFFER_SECONDS", 300)
+    refresh_enabled = _get_bool_env("LOTTOMATICAPSS_AUTH_TOKEN_REFRESH_ENABLED", False)
+    revocation_enabled = _get_bool_env("LOTTOMATICAPSS_AUTH_TOKEN_REVOCATION_ENABLED", False)
+    revocation_check_interval = _get_int_env("LOTTOMATICAPSS_AUTH_TOKEN_REVOCATION_CHECK_INTERVAL_SECONDS", 60)
+    revocation_backend = (os.getenv("LOTTOMATICAPSS_AUTH_TOKEN_REVOCATION_BACKEND") or "memory").strip().lower()
+    redis_url = (os.getenv("LOTTOMATICAPSS_AUTH_TOKEN_REDIS_URL") or "").strip() or None
     
     return TokenSettings(
         enabled=enabled,
@@ -437,14 +443,14 @@ def _build_token_settings() -> TokenSettings:
 
 def _build_rate_limit_settings() -> RateLimitSettings:
     """Build rate limiting configuration (Phase 2)."""
-    enabled = _get_bool_env("FERREROMED_RATE_LIMIT_ENABLED", False)
-    per_user = _get_int_env("FERREROMED_RATE_LIMIT_PER_USER", 1000)
-    per_api_key = _get_int_env("FERREROMED_RATE_LIMIT_PER_API_KEY", 10000)
-    per_ip = _get_int_env("FERREROMED_RATE_LIMIT_PER_IP", 5000)
-    per_tenant = _get_int_env("FERREROMED_RATE_LIMIT_PER_TENANT", 50000)
-    token_endpoint_limit = _get_int_env("FERREROMED_RATE_LIMIT_TOKEN_ENDPOINT", 100)
-    auth_endpoint_limit = _get_int_env("FERREROMED_RATE_LIMIT_AUTH_ENDPOINT", 50)
-    storage_backend = (os.getenv("FERREROMED_RATE_LIMIT_STORAGE_BACKEND") or "memory").strip().lower()
+    enabled = _get_bool_env("LOTTOMATICAPSS_RATE_LIMIT_ENABLED", False)
+    per_user = _get_int_env("LOTTOMATICAPSS_RATE_LIMIT_PER_USER", 1000)
+    per_api_key = _get_int_env("LOTTOMATICAPSS_RATE_LIMIT_PER_API_KEY", 10000)
+    per_ip = _get_int_env("LOTTOMATICAPSS_RATE_LIMIT_PER_IP", 5000)
+    per_tenant = _get_int_env("LOTTOMATICAPSS_RATE_LIMIT_PER_TENANT", 50000)
+    token_endpoint_limit = _get_int_env("LOTTOMATICAPSS_RATE_LIMIT_TOKEN_ENDPOINT", 100)
+    auth_endpoint_limit = _get_int_env("LOTTOMATICAPSS_RATE_LIMIT_AUTH_ENDPOINT", 50)
+    storage_backend = (os.getenv("LOTTOMATICAPSS_RATE_LIMIT_STORAGE_BACKEND") or "memory").strip().lower()
     
     return RateLimitSettings(
         enabled=enabled,
@@ -460,11 +466,11 @@ def _build_rate_limit_settings() -> RateLimitSettings:
 
 def _build_rbac_settings() -> RBACSettings:
     """Build RBAC configuration (Phase 3)."""
-    enabled = _get_bool_env("FERREROMED_RBAC_ENABLED", False)
-    enforce_scopes = _get_bool_env("FERREROMED_RBAC_ENFORCE_SCOPES", False)
-    scope_prefix = (os.getenv("FERREROMED_RBAC_SCOPE_PREFIX") or "ferreromed:").strip()
-    roles_enabled = _get_bool_env("FERREROMED_RBAC_ROLES_ENABLED", False)
-    resource_permissions_enabled = _get_bool_env("FERREROMED_RBAC_RESOURCE_PERMISSIONS_ENABLED", False)
+    enabled = _get_bool_env("LOTTOMATICAPSS_RBAC_ENABLED", False)
+    enforce_scopes = _get_bool_env("LOTTOMATICAPSS_RBAC_ENFORCE_SCOPES", False)
+    scope_prefix = (os.getenv("LOTTOMATICAPSS_RBAC_SCOPE_PREFIX") or "lottomaticapss:").strip()
+    roles_enabled = _get_bool_env("LOTTOMATICAPSS_RBAC_ROLES_ENABLED", False)
+    resource_permissions_enabled = _get_bool_env("LOTTOMATICAPSS_RBAC_RESOURCE_PERMISSIONS_ENABLED", False)
     
     return RBACSettings(
         enabled=enabled,
@@ -477,11 +483,11 @@ def _build_rbac_settings() -> RBACSettings:
 
 def _build_tenant_settings() -> TenantSettings:
     """Build multi-tenancy configuration (Phase 3)."""
-    enabled = _get_bool_env("FERREROMED_TENANT_ENABLED", False)
-    tenant_isolation_enabled = _get_bool_env("FERREROMED_TENANT_ISOLATION_ENABLED", False)
-    extract_from_token_claim = (os.getenv("FERREROMED_TENANT_EXTRACT_FROM_TOKEN_CLAIM") or "tenant_id").strip()
-    allow_cross_tenant_queries = _get_bool_env("FERREROMED_TENANT_ALLOW_CROSS_TENANT_QUERIES", False)
-    scim_provisioning_enabled = _get_bool_env("FERREROMED_TENANT_SCIM_PROVISIONING_ENABLED", False)
+    enabled = _get_bool_env("LOTTOMATICAPSS_TENANT_ENABLED", False)
+    tenant_isolation_enabled = _get_bool_env("LOTTOMATICAPSS_TENANT_ISOLATION_ENABLED", False)
+    extract_from_token_claim = (os.getenv("LOTTOMATICAPSS_TENANT_EXTRACT_FROM_TOKEN_CLAIM") or "tenant_id").strip()
+    allow_cross_tenant_queries = _get_bool_env("LOTTOMATICAPSS_TENANT_ALLOW_CROSS_TENANT_QUERIES", False)
+    scim_provisioning_enabled = _get_bool_env("LOTTOMATICAPSS_TENANT_SCIM_PROVISIONING_ENABLED", False)
     
     return TenantSettings(
         enabled=enabled,
@@ -494,13 +500,13 @@ def _build_tenant_settings() -> TenantSettings:
 
 def _build_mfa_settings() -> MFASettings:
     """Build MFA configuration (Phase 4)."""
-    enabled = _get_bool_env("FERREROMED_MFA_ENABLED", False)
-    enforce_mfa = _get_bool_env("FERREROMED_MFA_ENFORCE_MFA", False)
-    supported_methods_raw = (os.getenv("FERREROMED_MFA_SUPPORTED_METHODS") or "totp,sms,email,webauthn").strip()
+    enabled = _get_bool_env("LOTTOMATICAPSS_MFA_ENABLED", False)
+    enforce_mfa = _get_bool_env("LOTTOMATICAPSS_MFA_ENFORCE_MFA", False)
+    supported_methods_raw = (os.getenv("LOTTOMATICAPSS_MFA_SUPPORTED_METHODS") or "totp,sms,email,webauthn").strip()
     supported_methods = tuple(m.strip() for m in supported_methods_raw.split(",") if m.strip())
-    totp_issuer = (os.getenv("FERREROMED_MFA_TOTP_ISSUER") or "FerreroMed MCP").strip()
-    backup_codes_enabled = _get_bool_env("FERREROMED_MFA_BACKUP_CODES_ENABLED", True)
-    grace_period_days = _get_int_env("FERREROMED_MFA_GRACE_PERIOD_DAYS", 7)
+    totp_issuer = (os.getenv("LOTTOMATICAPSS_MFA_TOTP_ISSUER") or "Lottomaticapss MCP").strip()
+    backup_codes_enabled = _get_bool_env("LOTTOMATICAPSS_MFA_BACKUP_CODES_ENABLED", True)
+    grace_period_days = _get_int_env("LOTTOMATICAPSS_MFA_GRACE_PERIOD_DAYS", 7)
     
     return MFASettings(
         enabled=enabled,
@@ -514,16 +520,16 @@ def _build_mfa_settings() -> MFASettings:
 
 def _build_risk_management_settings() -> RiskManagementSettings:
     """Build risk management configuration (Phase 4)."""
-    enabled = _get_bool_env("FERREROMED_RISK_MANAGEMENT_ENABLED", False)
-    ip_reputation_check = _get_bool_env("FERREROMED_RISK_MANAGEMENT_IP_REPUTATION_CHECK", False)
-    geolocation_check = _get_bool_env("FERREROMED_RISK_MANAGEMENT_GEOLOCATION_CHECK", False)
-    device_fingerprinting = _get_bool_env("FERREROMED_RISK_MANAGEMENT_DEVICE_FINGERPRINTING", False)
-    anomaly_detection = _get_bool_env("FERREROMED_RISK_MANAGEMENT_ANOMALY_DETECTION", False)
-    step_up_auth_on_risk = _get_bool_env("FERREROMED_RISK_MANAGEMENT_STEP_UP_AUTH_ON_RISK", False)
-    require_mfa_on_high_risk = _get_bool_env("FERREROMED_RISK_MANAGEMENT_REQUIRE_MFA_ON_HIGH_RISK", False)
-    max_concurrent_sessions_raw = (os.getenv("FERREROMED_RISK_MANAGEMENT_MAX_CONCURRENT_SESSIONS") or "").strip()
+    enabled = _get_bool_env("LOTTOMATICAPSS_RISK_MANAGEMENT_ENABLED", False)
+    ip_reputation_check = _get_bool_env("LOTTOMATICAPSS_RISK_MANAGEMENT_IP_REPUTATION_CHECK", False)
+    geolocation_check = _get_bool_env("LOTTOMATICAPSS_RISK_MANAGEMENT_GEOLOCATION_CHECK", False)
+    device_fingerprinting = _get_bool_env("LOTTOMATICAPSS_RISK_MANAGEMENT_DEVICE_FINGERPRINTING", False)
+    anomaly_detection = _get_bool_env("LOTTOMATICAPSS_RISK_MANAGEMENT_ANOMALY_DETECTION", False)
+    step_up_auth_on_risk = _get_bool_env("LOTTOMATICAPSS_RISK_MANAGEMENT_STEP_UP_AUTH_ON_RISK", False)
+    require_mfa_on_high_risk = _get_bool_env("LOTTOMATICAPSS_RISK_MANAGEMENT_REQUIRE_MFA_ON_HIGH_RISK", False)
+    max_concurrent_sessions_raw = (os.getenv("LOTTOMATICAPSS_RISK_MANAGEMENT_MAX_CONCURRENT_SESSIONS") or "").strip()
     max_concurrent_sessions = int(max_concurrent_sessions_raw) if max_concurrent_sessions_raw else None
-    session_timeout_minutes = _get_int_env("FERREROMED_RISK_MANAGEMENT_SESSION_TIMEOUT_MINUTES", 60)
+    session_timeout_minutes = _get_int_env("LOTTOMATICAPSS_RISK_MANAGEMENT_SESSION_TIMEOUT_MINUTES", 60)
     
     return RiskManagementSettings(
         enabled=enabled,
@@ -540,17 +546,17 @@ def _build_risk_management_settings() -> RiskManagementSettings:
 
 def _build_compliance_settings() -> ComplianceSettings:
     """Build compliance configuration (Phase 4)."""
-    enabled = _get_bool_env("FERREROMED_COMPLIANCE_ENABLED", False)
-    frameworks_raw = (os.getenv("FERREROMED_COMPLIANCE_FRAMEWORKS") or "").strip()
+    enabled = _get_bool_env("LOTTOMATICAPSS_COMPLIANCE_ENABLED", False)
+    frameworks_raw = (os.getenv("LOTTOMATICAPSS_COMPLIANCE_FRAMEWORKS") or "").strip()
     frameworks = tuple(f.strip() for f in frameworks_raw.split(",") if f.strip())
-    gdpr_enabled = _get_bool_env("FERREROMED_COMPLIANCE_GDPR_ENABLED", False)
-    gdpr_data_residency = (os.getenv("FERREROMED_COMPLIANCE_GDPR_DATA_RESIDENCY") or "").strip() or None
-    hipaa_enabled = _get_bool_env("FERREROMED_COMPLIANCE_HIPAA_ENABLED", False)
-    hipaa_encryption_enabled = _get_bool_env("FERREROMED_COMPLIANCE_HIPAA_ENCRYPTION_ENABLED", True)
-    pci_dss_enabled = _get_bool_env("FERREROMED_COMPLIANCE_PCI_DSS_ENABLED", False)
-    soc2_enabled = _get_bool_env("FERREROMED_COMPLIANCE_SOC2_ENABLED", False)
-    audit_retention_years = _get_int_env("FERREROMED_COMPLIANCE_AUDIT_RETENTION_YEARS", 7)
-    right_to_be_forgotten_enabled = _get_bool_env("FERREROMED_COMPLIANCE_RIGHT_TO_BE_FORGOTTEN_ENABLED", False)
+    gdpr_enabled = _get_bool_env("LOTTOMATICAPSS_COMPLIANCE_GDPR_ENABLED", False)
+    gdpr_data_residency = (os.getenv("LOTTOMATICAPSS_COMPLIANCE_GDPR_DATA_RESIDENCY") or "").strip() or None
+    hipaa_enabled = _get_bool_env("LOTTOMATICAPSS_COMPLIANCE_HIPAA_ENABLED", False)
+    hipaa_encryption_enabled = _get_bool_env("LOTTOMATICAPSS_COMPLIANCE_HIPAA_ENCRYPTION_ENABLED", True)
+    pci_dss_enabled = _get_bool_env("LOTTOMATICAPSS_COMPLIANCE_PCI_DSS_ENABLED", False)
+    soc2_enabled = _get_bool_env("LOTTOMATICAPSS_COMPLIANCE_SOC2_ENABLED", False)
+    audit_retention_years = _get_int_env("LOTTOMATICAPSS_COMPLIANCE_AUDIT_RETENTION_YEARS", 7)
+    right_to_be_forgotten_enabled = _get_bool_env("LOTTOMATICAPSS_COMPLIANCE_RIGHT_TO_BE_FORGOTTEN_ENABLED", False)
     
     return ComplianceSettings(
         enabled=enabled,
@@ -566,36 +572,37 @@ def _build_compliance_settings() -> ComplianceSettings:
     )
 
 
-def get_settings() -> FerreroMedSettings:
-    api_base_url = (os.getenv("FERREROMED_API_BASE_URL") or "").strip().rstrip("/")
+def get_settings() -> LottomaticapssSettings:
+    api_base_url = (os.getenv("LOTTOMATICAPSS_API_BASE_URL") or "").strip().rstrip("/")
     # NOTE: We intentionally allow this to be empty so the Prefab UI can still
     # render in environments where the REST backend is not configured.
     # Individual tool/resource calls will raise a clear error if the base URL
     # is missing.
 
-    timeout_seconds_raw = (os.getenv("FERREROMED_API_TIMEOUT_SECONDS") or "30").strip()
+    timeout_seconds_raw = (os.getenv("LOTTOMATICAPSS_API_TIMEOUT_SECONDS") or "30").strip()
     try:
         timeout_seconds = float(timeout_seconds_raw)
     except ValueError as e:
         raise RuntimeError(
-            f"Invalid FERREROMED_API_TIMEOUT_SECONDS: {timeout_seconds_raw!r}"
+            f"Invalid LOTTOMATICAPSS_API_TIMEOUT_SECONDS: {timeout_seconds_raw!r}"
         ) from e
 
-    verify_ssl = _get_bool_env("FERREROMED_VERIFY_SSL", True)
+    verify_ssl = _get_bool_env("LOTTOMATICAPSS_VERIFY_SSL", True)
 
-    default_api_key = (os.getenv("FERREROMED_DEFAULT_API_KEY") or "").strip() or None
+    default_api_key = (os.getenv("LOTTOMATICAPSS_DEFAULT_API_KEY") or "").strip() or None
     
     # Response caching configuration (FastMCP 4.0.0+, SEP-2549)
-    cache_ttl = _coerce_positive_int(os.getenv("FERREROMED_CACHE_TTL"))
-    cache_scope = (os.getenv("FERREROMED_CACHE_SCOPE") or "private").strip().lower()
-    if cache_scope not in {"public", "private"}:
-        cache_scope = "private"
+    cache_ttl = _coerce_positive_int(os.getenv("LOTTOMATICAPSS_CACHE_TTL"))
+    cache_scope: str | None = None
+    if cache_ttl is not None:
+        scope_raw = (os.getenv("LOTTOMATICAPSS_CACHE_SCOPE") or "private").strip().lower()
+        cache_scope = scope_raw if scope_raw in {"public", "private"} else "private"
     
     # Pagination for large listings
-    list_page_size = _coerce_positive_int(os.getenv("FERREROMED_LIST_PAGE_SIZE"))
+    list_page_size = _coerce_positive_int(os.getenv("LOTTOMATICAPSS_LIST_PAGE_SIZE"))
     
     # Error masking for production security
-    mask_error_details = _get_bool_env("FERREROMED_MASK_ERROR_DETAILS", False)
+    mask_error_details = _get_bool_env("LOTTOMATICAPSS_MASK_ERROR_DETAILS", False)
     
     # Gateway configuration
     gateway = _build_gateway_settings()
@@ -611,7 +618,7 @@ def get_settings() -> FerreroMedSettings:
     risk_management = _build_risk_management_settings()
     compliance = _build_compliance_settings()
 
-    return FerreroMedSettings(
+    return LottomaticapssSettings(
         api_base_url=api_base_url,
         timeout_seconds=timeout_seconds,
         verify_ssl=verify_ssl,

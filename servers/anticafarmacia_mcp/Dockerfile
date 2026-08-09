@@ -12,12 +12,11 @@ RUN apt-get update \
 
 # Minimal runtime deps for AnticaFarmacia MCP server
 # IMPORTANT: Pin exact versions - prefab-ui has frequent breaking changes
-# FastMCP 4.0.0+ required for response caching (cache_ttl, cache_scope)
+# FastMCP 4.x required for response caching (cache_ttl, cache_scope)
 RUN pip install --no-cache-dir \
-    "fastmcp[apps]==4.0.0" \
+    "fastmcp[apps]==4.0.0b2" \
     "prefab-ui==0.19.1" \
-    "starlette==0.40.0" \
-    "httpx==0.27.0"
+    "httpx==0.28.1"
 
 # Copy only the MCP server package
 COPY servers/anticafarmacia_mcp/ /app/anticafarmacia_mcp/

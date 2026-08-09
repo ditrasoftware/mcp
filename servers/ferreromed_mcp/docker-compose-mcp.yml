@@ -1,3 +1,5 @@
+# Purpose: integrated REST+MCP deployment compose for FerreroMed.
+# Use this file for production-like deployments where REST and MCP run together.
 services:
   # Classic FerreroMed REST API (unchanged)
   ferreromed_ditra:
@@ -67,6 +69,20 @@ services:
       - FASTMCP_PORT=8001
       - FASTMCP_STREAMABLE_HTTP_PATH=/mcp
       - FASTMCP_STATELESS_HTTP=true
+
+      # Optional MCP auth mode (OIDC/OAuth)
+      - FERREROMED_MCP_AUTH_MODE=${FERREROMED_MCP_AUTH_MODE:-none}
+      - FERREROMED_MCP_BASE_URL=${FERREROMED_MCP_BASE_URL:-}
+      - FERREROMED_MCP_RESOURCE_BASE_URL=${FERREROMED_MCP_RESOURCE_BASE_URL:-}
+      - FERREROMED_MCP_AUTH_DEBUG=${FERREROMED_MCP_AUTH_DEBUG:-false}
+      - FERREROMED_OIDC_CONFIG_URL=${FERREROMED_OIDC_CONFIG_URL:-}
+      - FERREROMED_OIDC_CLIENT_ID=${FERREROMED_OIDC_CLIENT_ID:-}
+      - FERREROMED_OIDC_CLIENT_SECRET=${FERREROMED_OIDC_CLIENT_SECRET:-}
+      - FERREROMED_OIDC_JWT_SIGNING_KEY=${FERREROMED_OIDC_JWT_SIGNING_KEY:-}
+      - FERREROMED_OIDC_REQUIRED_SCOPES=${FERREROMED_OIDC_REQUIRED_SCOPES:-openid profile email}
+      - FERREROMED_OIDC_ALLOWED_CLIENT_REDIRECT_URIS=${FERREROMED_OIDC_ALLOWED_CLIENT_REDIRECT_URIS:-}
+      - FERREROMED_OIDC_VERIFY_ID_TOKEN=${FERREROMED_OIDC_VERIFY_ID_TOKEN:-false}
+      - FERREROMED_OIDC_TOKEN_ENDPOINT_AUTH_METHOD=${FERREROMED_OIDC_TOKEN_ENDPOINT_AUTH_METHOD:-client_secret_post}
 
       # Optional: enable OAuth/JWT verification at the MCP layer using Supabase Auth.
       # This helps OAuth-capable MCP clients send Authorization: Bearer <token> automatically.

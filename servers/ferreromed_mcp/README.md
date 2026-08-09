@@ -23,6 +23,20 @@ enable stateless Streamable HTTP mode:
 
 ## Deployment (recommended)
 
+### Compose File Roles
+
+- `docker-compose-mcp.yml`
+  - Canonical deployment-oriented compose in this folder.
+  - Integrated REST + MCP stack intended for production-like operation.
+- `docker-compose-mcp-example.yml`
+  - Copy/reference example for customization.
+  - Use when you want to start from a clean template before tuning environment-specific values.
+
+### Compose Commands
+
+- `docker compose -f docker-compose-mcp.yml up -d`
+- `docker compose -f docker-compose-mcp-example.yml up -d`
+
 Run REST + MCP as two services behind nginx-proxy (single domain):
 
 - Classic REST stays on the existing FerreroMed FastAPI container.

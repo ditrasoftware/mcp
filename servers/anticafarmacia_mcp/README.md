@@ -32,7 +32,8 @@ anticafarmacia_mcp/
 ├── Dockerfile               # Docker image
 ├── build.sh                 # Build script
 ├── fastmcp.json             # FastMCP configuration
-├── docker-compose-mcp.yml   # Docker Compose
+├── docker-compose.yml       # Deployment-oriented compose (prebuilt image, shared network)
+├── docker-compose-mcp.yml   # MCP-focused local/dev compose (local build)
 └── README.md                # This file
 ```
 
@@ -113,8 +114,21 @@ docker run -p 8001:8001 \
 #### Docker Compose
 
 ```bash
-docker-compose -f docker-compose-mcp.yml up -d
+# Deployment-oriented stack (default)
+docker compose up -d
+
+# MCP-focused local/dev stack
+docker compose -f docker-compose-mcp.yml up -d
 ```
+
+### 5. Compose File Roles
+
+- `docker-compose.yml`
+  - Deployment-oriented compose for prebuilt images and shared external networking.
+  - Use this for VM/remote runtime and production-like rollout.
+- `docker-compose-mcp.yml`
+  - MCP-focused local/dev compose using local `build: .`.
+  - Use this for rapid local iteration and isolated MCP testing.
 
 ## Configuration
 
