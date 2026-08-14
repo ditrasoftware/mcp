@@ -45,6 +45,47 @@ class OIDCSettings:
     token_endpoint_auth_method: str = "client_secret_basic"
 
 
+# OAuth 2.1 Security (RFC 9126, RFC 9449)
+@dataclass(frozen=True)
+class PKCESettings:
+    """PKCE (Proof Key for Public Clients) configuration - OAuth 2.1 core."""
+    enabled: bool = True  # OAuth 2.1 mandates PKCE for all flows
+    method: str = "S256"  # "S256" (SHA256) or "plain"
+    verifier_length: int = 128  # 43-128 characters, RFC 7636
+    challenge_method_enforced: bool = True  # Reject plain-text method
+
+
+@dataclass(frozen=True)
+class DoPSettings:
+    """DPoP (Demonstration of Proof-of-Possession) configuration - RFC 9449."""
+    enabled: bool = False  # Enable for production OAuth 2.1 compliance
+    key_binding_method: str = "dpop"  # "dpop" | "mtls" | "tls_client_cert"
+    require_dpop_for_refresh: bool = True  # Enforce DPoP on token refresh
+    proof_nonce_ttl_seconds: int = 60  # DPoP proof validity window
+    token_binding_backend: str = "memory"  # "memory" | "redis" | "vault"
+    redis_url: str | None = None
+
+
+@dataclass(frozen=True)
+class GCIPSettings:
+    """Google Cloud Identity Platform (GCIP) OAuth 2.1 integration."""
+    enabled: bool = False
+    project_id: str | None = None  # GCP project ID
+    config_url: str = "https://accounts.google.com/.well-known/openid-configuration"
+    client_id: str | None = None  # GCIP OAuth 2.0 Client ID
+    client_secret: str | None = None  # GCIP OAuth 2.0 Client Secret
+    # Supported federated providers (Google, email/password, SAML, custom OIDC)
+    federated_providers: tuple[str, ...] = ("google", "password", "saml", "oidc")
+    # Claims from GCIP to map to MCP tenant/role
+    tenant_claim_mapping: dict[str, str] | None = None  # e.g., {"organizations": "org_id"}
+    # Enforce custom scopes for downstream MCP operations
+    downstream_scopes_prefix: str = "anticafarmacia:"  # e.g., anticafarmacia:tools:read
+    # Multi-tenant namespace isolation
+    namespace_isolation_enabled: bool = False
+    # Provider-specific claim transformations
+    claim_transforms_enabled: bool = False
+
+
 @dataclass(frozen=True)
 class AuditSettings:
     """Audit logging configuration (Phase 1)."""
@@ -65,7 +106,7 @@ class AuditSettings:
 # PHASE 2: Token Management + Rate Limiting
 @dataclass(frozen=True)
 class TokenSettings:
-    """Token lifecycle configuration (Phase 2)."""
+    """Token lifecycle configuration (Phase 2) - Enhanced with OAuth 2.1 features."""
     enabled: bool = False
     access_token_ttl_seconds: int = 3600  # 1 hour
     refresh_token_ttl_seconds: int = 2592000  # 30 days
@@ -75,6 +116,12 @@ class TokenSettings:
     revocation_check_interval_seconds: int = 60
     revocation_backend: str = "memory"  # "memory" | "redis" | "vault"
     redis_url: str | None = None  # e.g., redis://localhost:6379
+    # OAuth 2.1 Refresh Token Rotation (RFC 6749 + OAuth 2.1 updates)
+    rotation_enabled: bool = False  # Issue new refresh token on refresh grant
+    rotation_policy: str = "always"  # "always" | "on_risk" | "never"
+    # Token binding (prevents token theft via DPoP or TLS binding)
+    binding_enabled: bool = False
+    binding_method: str = "dpop"  # "dpop" | "tls_unique" | "none"
 
 
 @dataclass(frozen=True)
@@ -103,12 +150,18 @@ class RBACSettings:
 
 @dataclass(frozen=True)
 class TenantSettings:
-    """Multi-tenancy configuration (Phase 3)."""
+    """Multi-tenancy configuration (Phase 3) - Enhanced for OAuth 2.1 + GCIP."""
     enabled: bool = False
     tenant_isolation_enabled: bool = False
-    extract_from_token_claim: str = "tenant_id"  # Which JWT claim contains tenant
+    extract_from_token_claim: str = "tenant_id"  # Which JWT claim contains tenant (or custom claim)
+    fallback_claims: tuple[str, ...] = ("org_id", "organization_id", "organizations")  # Fallback claim names
     allow_cross_tenant_queries: bool = False
     scim_provisioning_enabled: bool = False
+    # OAuth 2.1 tenant context forwarding
+    forward_tenant_to_downstream: bool = True  # Pass tenant_id in X-Tenant-ID header to downstream MCPs
+    tenant_header_name: str = "X-Tenant-ID"  # HTTP header name for tenant context
+    enforce_tenant_scope_isolation: bool = False  # Require scopes to include tenant prefix
+    tenant_scope_format: str = "{tenant}:{scope}"  # e.g., "acme:tools:read" for tenant "acme"
 
 
 # PHASE 4: Compliance + MFA + Risk Management
@@ -166,6 +219,10 @@ class FerreroMedSettings:
     # Phase 1: Foundation
     oidc: OIDCSettings = OIDCSettings()
     audit: AuditSettings = AuditSettings()
+    # OAuth 2.1 Security
+    pkce: PKCESettings = PKCESettings()
+    dpop: DoPSettings = DoPSettings()
+    gcip: GCIPSettings = GCIPSettings()
     # Phase 2: Token Management
     token: TokenSettings = TokenSettings()
     rate_limit: RateLimitSettings = RateLimitSettings()

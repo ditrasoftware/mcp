@@ -1,5 +1,8 @@
 FROM python:3.13-slim
 
+ARG FASTMCP_VERSION=4.0.0b2
+ARG PREFAB_UI_VERSION=0.19.1
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
@@ -10,12 +13,11 @@ RUN apt-get update \
     && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
-# Minimal runtime deps for AnticaFarmacia MCP server
-# IMPORTANT: Pin exact versions - prefab-ui has frequent breaking changes
-# FastMCP 4.x required for response caching (cache_ttl, cache_scope)
+# Minimal runtime deps for AnticaFarmacia MCP server.
+# FastMCP 4.x is required for response caching and current server APIs.
 RUN pip install --no-cache-dir \
-    "fastmcp[apps]==4.0.0b2" \
-    "prefab-ui==0.19.1" \
+    "fastmcp[apps]==${FASTMCP_VERSION}" \
+    "prefab-ui==${PREFAB_UI_VERSION}" \
     "httpx==0.28.1"
 
 # Copy only the MCP server package

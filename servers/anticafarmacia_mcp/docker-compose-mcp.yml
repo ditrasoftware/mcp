@@ -4,7 +4,9 @@ version: "3.8"
 # Use this file when iterating locally with a local build context.
 services:
   anticafarmacia-mcp:
-    build: .
+    build:
+      context: ../..
+      dockerfile: servers/anticafarmacia_mcp/Dockerfile
     container_name: anticafarmacia-mcp-dev
     environment:
       # Base API settings

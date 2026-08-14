@@ -10,6 +10,8 @@ from typing import Any
 import httpx
 
 from ..settings import RemoteBackendSettings
+from ..oauth2_1 import DoPProvider, _b64url
+import json
 
 
 @dataclass
@@ -20,6 +22,7 @@ class _TokenCacheEntry:
 
 _TOKEN_CACHE: dict[str, _TokenCacheEntry] = {}
 _AUTO_AUTH_SENTINEL = "__auto__"
+_DPOP_PROVIDER: DoPProvider | None = None  # OAuth 2.1 DPoP support
 
 
 class GatewayAuthConfigurationError(RuntimeError):
@@ -257,6 +260,49 @@ def _ensure_auth_configured(remote: RemoteBackendSettings) -> None:
     )
 
 
+def enable_dpop_for_remote_auth(enable: bool = True) -> None:
+    """Enable OAuth 2.1 DPoP (Demonstration of Proof-of-Possession) for token binding.
+    
+    Args:
+        enable: If True, token refresh requests include DPoP proofs for security
+    """
+    global _DPOP_PROVIDER
+    if enable:
+        _DPOP_PROVIDER = DoPProvider()
+    else:
+        _DPOP_PROVIDER = None
+
+
+def _add_dpop_header_if_enabled(
+    headers: dict[str, str],
+    http_method: str,
+    token_endpoint: str,
+) -> dict[str, str]:
+    """Add DPoP proof header to token request if DPoP is enabled.
+    
+    Args:
+        headers: Existing headers
+        http_method: HTTP method (POST)
+        token_endpoint: Token endpoint URL
+    
+    Returns:
+        Updated headers with DPoP-Proof if enabled
+    """
+    if not _DPOP_PROVIDER:
+        return headers
+    
+    try:
+        proof = _DPOP_PROVIDER.generate_proof(http_method, token_endpoint)
+        headers["DPoP"] = proof.token
+        return headers
+    except Exception as e:
+        # Log DPoP error but don't break token flow
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to generate DPoP proof: {e}")
+        return headers
+
+
 def clear_remote_auth_cache(remote: RemoteBackendSettings) -> None:
     prefix = f"{remote.name}|{remote.namespace}|"
     keys = [k for k in _TOKEN_CACHE if k.startswith(prefix)]
@@ -282,6 +328,9 @@ def resolve_remote_auth_sync(remote: RemoteBackendSettings, *, force_refresh: bo
     cached = _get_cached_token(cache_key)
     if cached and not force_refresh:
         return cached
+
+    # Add OAuth 2.1 DPoP proof if enabled
+    headers = _add_dpop_header_if_enabled(headers, "POST", token_endpoint)
 
     timeout = httpx.Timeout(20.0)
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:

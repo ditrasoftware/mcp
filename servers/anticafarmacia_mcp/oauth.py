@@ -6,8 +6,14 @@ import logging
 import time
 import hashlib
 import hmac
+import warnings
 from urllib.parse import urlencode, parse_qs
 from typing import Literal
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"authlib\.jose module is deprecated.*",
+)
 
 from fastmcp.server.auth import AuthProvider
 from fastmcp.server.auth.auth import RemoteAuthProvider

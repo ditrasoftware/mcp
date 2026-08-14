@@ -14,12 +14,19 @@ anticafarmacia_mcp/
 ├── __init__.py              # Package init
 ├── __main__.py              # Entry point
 ├── auth.py                  # Auth helpers
+├── auth_enterprise.py       # Enterprise auth (SAML, etc.)
 ├── oauth.py                 # OAuth/OIDC provider
+├── oauth2_1.py              # OAuth 2.1 utilities (PKCE, DPoP, token binding)
+├── tenant_context.py        # Multi-tenant context extraction & forwarding
 ├── rest_client.py           # Generic REST client
-├── settings.py              # Configuration
+├── settings.py              # Configuration (includes OAuth 2.1 + GCIP)
 ├── server.py                # MCP server + middleware
 ├── maps.py                  # Mapping/location resources (TODO)
-├── gateway/                 # Gateway implementation (copy from ferreromed_mcp)
+├── gateway/                 # Gateway implementation
+│   ├── __init__.py
+│   ├── direct.py
+│   ├── proxy.py
+│   └── remote_auth.py       # Remote MCP auth with DPoP support
 ├── providers/
 │   ├── __init__.py
 │   ├── local_tools.py       # Domain-specific tools (TODO)
@@ -29,11 +36,14 @@ anticafarmacia_mcp/
 ├── apps/                    # Prefab UI apps (empty)
 ├── prompts/                 # Prompt templates (empty)
 ├── resources/               # Resource definitions (empty)
-├── Dockerfile               # Docker image
-├── build.sh                 # Build script
+├── Dockerfile               # Docker image (FastMCP 4.0.0b2)
+├── build.sh                 # Build & push script
 ├── fastmcp.json             # FastMCP configuration
-├── docker-compose.yml       # Deployment-oriented compose (prebuilt image, shared network)
-├── docker-compose-mcp.yml   # MCP-focused local/dev compose (local build)
+├── docker-compose.yml       # Deployment compose (prod-oriented, prebuilt image)
+├── docker-compose-mcp.yml   # Local dev compose (local build)
+├── docker-compose.anticafarmacia_mcp.yml  # OAuth 2.1 + GCIP config example
+├── .env_example             # Comprehensive env template (14 sections)
+├── .env_anticafarmacia_mcp  # Test configuration with real OAuth 2.1 settings
 └── README.md                # This file
 ```
 
@@ -147,6 +157,129 @@ docker compose -f docker-compose-mcp.yml up -d
 
 - **passthrough** (default): Return raw results from remote tools unmodified
 - **normalized**: Normalize results to a standard format (content blocks, etc.)
+
+## OAuth 2.1 & GCIP Multi-Tenant Support
+
+AnticaFarmacia MCP includes comprehensive OAuth 2.1 support with Google Cloud Identity Platform (GCIP) for multi-tenant deployments.
+
+### OAuth 2.1 Features
+
+**PKCE (Proof Key for Code Exchange) - RFC 9126**
+- Mandatory for OAuth 2.1 compliance
+- Prevents authorization code interception attacks
+- Automatically enabled for public clients
+- S256 (SHA256) method enforced
+
+```bash
+export ANTICAFARMACIA_PKCE_ENABLED=true
+export ANTICAFARMACIA_PKCE_METHOD=S256
+export ANTICAFARMACIA_PKCE_VERIFIER_LENGTH=128
+```
+
+**DPoP (Demonstration of Proof-of-Possession) - RFC 9449**
+- Binds tokens to client key pair
+- Prevents token replay if stolen
+- Recommended for production deployments
+- Optional but strongly recommended
+
+```bash
+export ANTICAFARMACIA_DPOP_ENABLED=true
+export ANTICAFARMACIA_DPOP_TOKEN_BINDING_BACKEND=memory  # or redis
+```
+
+**Token Rotation**
+- Automatic refresh token rotation (OAuth 2.1 best practice)
+- Configurable rotation policies: always, on_risk, never
+
+```bash
+export ANTICAFARMACIA_TOKEN_ROTATION_ENABLED=true
+export ANTICAFARMACIA_TOKEN_ROTATION_POLICY=always
+```
+
+### GCIP Multi-Tenant Configuration
+
+Enable multi-tenant support with Google Cloud Identity Platform:
+
+```bash
+# Enable GCIP
+export ANTICAFARMACIA_GCIP_ENABLED=true
+export ANTICAFARMACIA_GCIP_PROJECT_ID=your-gcp-project-id
+export ANTICAFARMACIA_GCIP_CLIENT_ID=YOUR_CLIENT_ID.apps.googleusercontent.com
+export ANTICAFARMACIA_GCIP_CLIENT_SECRET=YOUR_CLIENT_SECRET
+
+# OIDC Proxy Authentication
+export ANTICAFARMACIA_MCP_AUTH_MODE=oidc_proxy
+export ANTICAFARMACIA_OIDC_CONFIG_URL=https://accounts.google.com/.well-known/openid-configuration
+export ANTICAFARMACIA_OIDC_CLIENT_ID=${ANTICAFARMACIA_GCIP_CLIENT_ID}
+export ANTICAFARMACIA_OIDC_CLIENT_SECRET=${ANTICAFARMACIA_GCIP_CLIENT_SECRET}
+
+# Multi-Tenant Settings
+export ANTICAFARMACIA_TENANT_ENABLED=true
+export ANTICAFARMACIA_TENANT_EXTRACT_CLAIM=organizations  # Primary claim
+export ANTICAFARMACIA_TENANT_FALLBACK_CLAIMS=org_id,organization_id,tenant_id
+export ANTICAFARMACIA_TENANT_FORWARD_TO_DOWNSTREAM=true  # Forward to remote MCPs
+```
+
+### Tenant Context Forwarding
+
+When enabled, the MCP automatically forwards tenant context to downstream MCPs via HTTP headers:
+
+```
+X-Tenant-ID: acme-corp
+X-Org-ID: org_12345
+X-MCP-Namespace: acme_corp
+X-User-Roles: admin,user
+X-User-Scopes: tools:read,resources:write
+```
+
+Downstream MCPs can use these headers to enforce tenant isolation and implement tenant-scoped authorization.
+
+### Production Security Configuration
+
+For production deployments, enable all OAuth 2.1 security features:
+
+```bash
+# Phase 1: PKCE + Multi-Tenant (Required)
+export ANTICAFARMACIA_PKCE_ENABLED=true
+export ANTICAFARMACIA_TENANT_ENABLED=true
+export ANTICAFARMACIA_TENANT_ISOLATION_ENABLED=true
+
+# Phase 2: DPoP + Token Rotation (Recommended)
+export ANTICAFARMACIA_DPOP_ENABLED=true
+export ANTICAFARMACIA_TOKEN_ROTATION_ENABLED=true
+
+# Phase 3: Audit Logging + RBAC (Optional)
+export ANTICAFARMACIA_AUDIT_ENABLED=true
+export ANTICAFARMACIA_AUDIT_DESTINATION=cloudwatch  # or elk, splunk
+export ANTICAFARMACIA_RBAC_ENABLED=true
+
+# Use Redis for distributed token management
+export ANTICAFARMACIA_REDIS_URL=redis://redis-cluster:6379
+export ANTICAFARMACIA_DPOP_TOKEN_BINDING_BACKEND=redis
+```
+
+### Architecture: OAuth 2.1 + GCIP Flow
+
+```
+Client Browser
+     |
+     | (PKCE Challenge)
+     v
+GCIP Provider
+     |
+     | (Generate ID Token with tenant in "organizations" claim)
+     v
+AnticaFarmacia MCP (OIDC Proxy)
+     | (Extract tenant from ID token)
+     | (Generate access token with tenant scope)
+     v
+Downstream MCPs (via X-Tenant-ID header)
+     | (Enforce tenant isolation)
+     v
+Domain-Specific Resources
+```
+
+For more details, see `.env_example` (Section 1-4) or `.env_anticafarmacia_mcp` for a complete test configuration.
 
 ## Authentication
 

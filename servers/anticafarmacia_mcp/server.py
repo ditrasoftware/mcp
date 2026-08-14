@@ -446,7 +446,7 @@ def create_mcp() -> FastMCP:
             if not _should_advertise_hashed_tool_aliases(context):
                 return tools
 
-            app_names_for_hash = ["AnticaFarmacia"]
+            app_names_for_hash = ["AnticaFarmacia"]  # Derived from server name for tool hash aliasing
             include_legacy = _should_include_legacy_hashed_aliases(context)
             for t in list(tools):
                 for app_name_for_hash in app_names_for_hash:
@@ -467,15 +467,22 @@ def create_mcp() -> FastMCP:
     # Health check endpoint for HTTP transport (useful for load balancers, Kubernetes)
     @mcp.custom_route("/health", methods=["GET"])
     async def health_check(request: Request) -> PlainTextResponse:
-        """Simple health check endpoint.
-        
-        Returns:
-            200 OK if the server is running and configured
-            503 Service Unavailable if API base URL is not configured
-        """
-        if settings.api_base_url:
-            return PlainTextResponse("OK")
-        return PlainTextResponse("API_BASE_URL not configured", status_code=503)
+        """Liveness check endpoint that does not depend on downstream config."""
+        return PlainTextResponse("OK")
+
+    @mcp.custom_route("/ready", methods=["GET"])
+    async def readiness_check(request: Request) -> JSONResponse:
+        """Readiness check endpoint with lightweight configuration details."""
+        return JSONResponse(
+            {
+                "status": "ready",
+                "api_base_url_configured": bool(settings.api_base_url),
+                "gateway_mode": settings.gateway.mode,
+                "route_policy": settings.gateway.route_policy,
+                "configured_remotes": len(settings.gateway.remotes),
+                "mounted_remotes": len(mounted_remotes),
+            }
+        )
 
     # Resources + prompts
     local_resource_registry = register_local_resources(mcp, client)
