@@ -3,8 +3,8 @@
 # For local development/MCP-focused testing, use docker-compose-mcp.yml instead.
 services:
   anticafarmacia_mcp:
-    # Deployment image built by build.sh (TAG=1.0.0)
-    image: ${ANTICAFARMACIA_MCP_IMAGE:-gcr.io/oxytrack-322814/ditra-anticafarmacia-mcp:1.0.0}
+    # Deployment image built by build.sh (TAG=1.0.1)
+    image: ${ANTICAFARMACIA_MCP_IMAGE:-gcr.io/oxytrack-322814/ditra-anticafarmacia-mcp:1.0.1}
     pull_policy: always
     container_name: anticafarmacia-mcp
     environment:
