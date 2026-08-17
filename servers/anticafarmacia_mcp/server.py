@@ -4,6 +4,7 @@ import argparse
 import base64
 import os
 import re
+import time
 from typing import Any
 
 from fastmcp import FastMCP
@@ -14,7 +15,7 @@ import mcp.types as mt
 from fastmcp.server.providers.addressing import hashed_backend_name
 from fastmcp.resources.base import ResourceContent, ResourceResult
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 
 from .rest_client import AnticaFarmaciaAuth, AnticaFarmaciaRestClient
 from .settings import get_settings
@@ -26,6 +27,12 @@ from .gateway import (
     list_remote_tools,
     mount_remote_proxies,
     probe_remote_backend,
+    discover_remote_tools_with_namespaces,
+    call_remote_tool_by_namespace,
+    get_remote_tool_suggestions,
+    discover_remote_tools_with_resilience,
+    call_remote_tool_with_resilience,
+    GatewayResilienceManager,
 )
 from .providers import (
     create_local_app_providers,
@@ -276,7 +283,8 @@ def _should_advertise_hashed_tool_aliases(ctx: Any) -> bool:
         return False
     if _is_claude_like_request(ctx):
         return True
-    return True
+    # Be conservative for unknown clients to avoid protocol/tool-name constraints.
+    return False
 
 
 def _should_include_legacy_hashed_aliases(ctx: Any) -> bool:
@@ -291,6 +299,11 @@ def _should_include_legacy_hashed_aliases(ctx: Any) -> bool:
     if _is_claude_like_request(ctx):
         return True
     return False
+
+
+def _within_tool_name_limit(name: str, limit: int = 64) -> bool:
+    """Return True when tool name fits common function-name limits."""
+    return len(name) <= limit
 
 
 def _resolve_remote_route(
@@ -364,6 +377,15 @@ def create_mcp() -> FastMCP:
         cache_scope=settings.cache_scope,
         list_page_size=settings.list_page_size,
         mask_error_details=settings.mask_error_details,
+    )
+
+    # Initialize resilience manager for local-first gateway isolation
+    resilience_mgr = GatewayResilienceManager(
+        failure_threshold=3,
+        cooldown_base_ms=300_000,  # 5 min
+        cooldown_max_ms=1_800_000,  # 30 min
+        list_tools_timeout_ms=10_000,  # 10s per-remote for tool listing
+        call_tool_timeout_ms=30_000,  # 30s per-remote for tool calls
     )
 
     class _StripToolHashMiddleware(Middleware):
@@ -453,11 +475,11 @@ def create_mcp() -> FastMCP:
                     hashed = hashed_backend_name(app_name_for_hash, t.name)
 
                     safe_hashed = f"_{hashed}"
-                    if safe_hashed not in seen:
+                    if safe_hashed not in seen and _within_tool_name_limit(safe_hashed):
                         tools.append(t.model_copy(update={"name": safe_hashed}))
                         seen.add(safe_hashed)
 
-                    if include_legacy and hashed not in seen:
+                    if include_legacy and hashed not in seen and _within_tool_name_limit(hashed):
                         tools.append(t.model_copy(update={"name": hashed}))
                         seen.add(hashed)
             return tools
@@ -485,7 +507,7 @@ def create_mcp() -> FastMCP:
         )
 
     # Resources + prompts
-    local_resource_registry = register_local_resources(mcp, client)
+    local_resource_registry = register_local_resources(mcp, client, settings)
     local_prompt_registry = register_local_prompts(mcp)
     register_maps(mcp)
 
@@ -615,6 +637,163 @@ def create_mcp() -> FastMCP:
             "route_policy": settings.gateway.route_policy,
             "direct_result_strategy": settings.gateway.direct_result_strategy,
             "tool_route_overrides": tool_route_overrides,
+        }
+
+    @mcp.tool()
+    async def gateway_discover_remote_tools() -> dict[str, Any]:
+        """Discover all tools on all configured remotes with namespace collision detection.
+
+        Returns:
+          - tools_by_remote: organized by remote name
+          - namespaced_tools: all tools with their full unique names (remote:name:tool)
+          - collisions: tool name collisions across remotes (same tool in multiple remotes)
+          - collision_summary: human-readable warning about collisions
+          - total_remotes: count of enabled remotes
+          - total_tools: total unique tool names across all remotes
+          - collision_count: number of collision groups
+        """
+        return await discover_remote_tools_with_namespaces(settings.gateway)
+
+    @mcp.tool()
+    async def gateway_call_tool_namespaced(
+        full_name: str,
+        arguments: dict[str, Any] | None = None,
+        result_strategy: str | None = None,
+    ) -> Any:
+        """Call a remote tool using its full namespaced name.
+
+        Namespaced tool names follow the pattern: remote:<remote_name>:<tool_name>
+
+        Examples:
+          - full_name='remote:google-workspace-mcp:list_users'
+          - full_name='remote:google-toolbox-mcp:create_task'
+
+        This approach ensures no collisions when multiple remotes have tools with the same name.
+        Use gateway_discover_remote_tools to see all available namespaced tool names.
+        """
+        return await call_remote_tool_by_namespace(
+            settings.gateway,
+            full_name=full_name,
+            arguments=arguments,
+            result_strategy=result_strategy,
+        )
+
+    @mcp.tool()
+    async def gateway_suggest_remote_tools(
+        partial_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Get suggestions for remote tools, optionally filtered by partial name matching.
+
+        If partial_name is not provided, returns all available remote tools.
+        If partial_name='list', returns all tools containing 'list' from any remote.
+
+        Useful for:
+          - Discovering available tools across all remotes
+          - Finding tools by partial name match
+          - Resolving ambiguous or colliding tool names
+        """
+        return await get_remote_tool_suggestions(settings.gateway, partial_name=partial_name)
+
+    @mcp.tool()
+    async def gateway_detect_tool_collisions() -> dict[str, Any]:
+        """Detect and report tool name collisions across all configured remotes.
+
+        Tool name collision occurs when multiple remotes expose tools with the same name.
+        For example, both google-workspace-mcp and google-toolbox-mcp might have a 'list_users' tool.
+
+        Returns:
+          - collision_count: number of collision groups
+          - collisions: {base_tool_name -> [remotes]}
+          - collision_summary: human-readable warning
+          - resolution: instructions for using namespaced names to avoid collisions
+
+        To call colliding tools unambiguously, use gateway_call_tool_namespaced with the
+        full namespaced name (e.g., 'remote:google-workspace-mcp:list_users').
+        """
+        discovery = await discover_remote_tools_with_namespaces(settings.gateway)
+        collisions = discovery.get("collisions", {})
+
+        return {
+            "collision_count": len(collisions),
+            "collisions": collisions,
+            "collision_summary": discovery.get("collision_summary", "No collisions detected."),
+            "resolution": (
+                "To call a colliding tool unambiguously, use gateway_call_tool_namespaced "
+                "with the format: remote:<remote_name>:<tool_name>\n"
+                "Example: remote:google-workspace-mcp:list_users"
+            ),
+            "total_remotes": discovery.get("total_remotes"),
+            "total_tools": discovery.get("total_tools"),
+        }
+
+    @mcp.tool()
+    async def gateway_discover_remote_tools_resilient() -> dict[str, Any]:
+        """Discover all tools on all remotes with per-remote timeout and error isolation.
+
+        TASK 1.0 IMPLEMENTATION: Local-first resilience with gateway isolation.
+
+        Key behaviors:
+          - Each remote's tool listing has a 10s timeout (per-remote)
+          - If one remote times out or fails, other remotes and LOCAL tools remain unaffected
+          - Remote health status is transparently included in the response
+          - Error isolation: one broken remote doesn't block local tool availability
+
+        Returns:
+          - tools_by_remote: {remote_name -> tools_list_or_error}
+          - namespaced_tools: tools with full unique names (remote:name:tool)
+          - remote_health: per-remote status including circuit breaker state, latency, errors
+          - collisions: tool name collisions detected
+          - collision_summary: human-readable warning
+          - total_tools, collision_count, total_remotes: summary counts
+
+        This is the resilience-aware version of gateway_discover_remote_tools().
+        Use this for production tool discovery to ensure local tools are never blocked by remote failures.
+        """
+        return await discover_remote_tools_with_resilience(settings.gateway, resilience_mgr=resilience_mgr)
+
+    @mcp.tool()
+    async def gateway_remote_health_status() -> dict[str, Any]:
+        """Get detailed health status for all configured remote backends.
+
+        TASK 1.0 IMPLEMENTATION: Local-first resilience with gateway isolation.
+
+        Returns per-remote:
+          - remote_name, remote_namespace: identity
+          - enabled, reachable: operational state
+          - error: last error message (if reachable=false)
+          - circuit_state: CLOSED (normal), OPEN (cooldown), or HALF_OPEN (recovery probe)
+          - failure_count: consecutive failures before circuit opened
+          - last_failure_time, last_success_time: timestamps
+          - latency_ms: last observed call latency
+
+        Use this to:
+          - Check which remotes are healthy (reachable=true, circuit_state=CLOSED)
+          - Detect degraded remotes (circuit_state=OPEN, awaiting cooldown)
+          - Monitor latency and failure trends
+          - Decide whether to prompt retry or use local fallback
+
+        Local tools are ALWAYS available regardless of remote health.
+        """
+        health_status = resilience_mgr.get_all_health_status()
+        return {
+            "timestamp": time.time(),
+            "remotes": [
+                {
+                    "name": health.remote_name,
+                    "namespace": health.remote_namespace,
+                    "enabled": health.enabled,
+                    "reachable": health.reachable,
+                    "error": health.error,
+                    "circuit_state": health.circuit_state.value,
+                    "failure_count": health.failure_count,
+                    "last_failure_time": health.last_failure_time,
+                    "last_success_time": health.last_success_time,
+                    "latency_ms": health.latency_ms,
+                }
+                for health in health_status.values()
+            ],
+            "local_tools_available": True,
+            "summary": f"{len([h for h in health_status.values() if h.reachable])}/{len(health_status)} remotes healthy",
         }
 
     local_tool_names = register_local_tools(

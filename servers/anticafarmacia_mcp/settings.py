@@ -419,7 +419,7 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
         True,
     )
 
-    return (
+    remotes: list[RemoteBackendSettings] = [
         RemoteBackendSettings(
             name="toolbox-mssql",
             namespace="toolbox_mssql",
@@ -442,7 +442,60 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
             server_instructions=server_instructions,
             enabled=enabled,
         ),
+    ]
+
+    google_toolbox_enabled = _get_bool_env_alias(
+        "ANTICAFARMACIA_GATEWAY_ENABLE_GOOGLE_TOOLBOX_MCP",
+        "FERREROMED_GATEWAY_ENABLE_GOOGLE_TOOLBOX_MCP",
+        False,
     )
+    google_toolbox_url = (
+        _get_first_set_env(
+            "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_URL",
+            "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_MCP_URL",
+            "GOOGLE_TOOLBOX_MCP_URL",
+        )
+        or "http://google-toolbox-mcp:8000/mcp"
+    ).strip() or "http://google-toolbox-mcp:8000/mcp"
+    google_toolbox_auth = (
+        _get_first_set_env(
+            "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_AUTH",
+            "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_MCP_AUTH",
+            "GOOGLE_TOOLBOX_MCP_BEARER_TOKEN",
+        )
+        or ""
+    ).strip() or None
+    google_toolbox_init_timeout_ms = _get_int_env_alias(
+        "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_INIT_TIMEOUT_MS",
+        "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_INIT_TIMEOUT_MS",
+        20000,
+    )
+    google_toolbox_timeout_ms = _get_int_env_alias(
+        "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_TIMEOUT_MS",
+        "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_TIMEOUT_MS",
+        60000,
+    )
+    google_toolbox_server_instructions = _get_bool_env_alias(
+        "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_SERVER_INSTRUCTIONS",
+        "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_SERVER_INSTRUCTIONS",
+        True,
+    )
+
+    remotes.append(
+        RemoteBackendSettings(
+            name="google-toolbox-mcp",
+            namespace="google_toolbox_mcp",
+            type="streamable-http",
+            url=google_toolbox_url,
+            auth=google_toolbox_auth,
+            init_timeout_ms=google_toolbox_init_timeout_ms,
+            timeout_ms=google_toolbox_timeout_ms,
+            server_instructions=google_toolbox_server_instructions,
+            enabled=google_toolbox_enabled,
+        )
+    )
+
+    return tuple(remotes)
 
 
 def _build_gateway_settings() -> GatewaySettings:

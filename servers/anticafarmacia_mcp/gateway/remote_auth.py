@@ -4,6 +4,7 @@ import base64
 import os
 import re
 import time
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +13,8 @@ import httpx
 from ..settings import RemoteBackendSettings
 from ..oauth2_1 import DoPProvider, _b64url
 import json
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -205,15 +208,53 @@ def _extract_token_payload(payload: Any) -> tuple[str | None, int | float | None
     return token, expires_in
 
 
+def _is_jwt_expired(token: str) -> bool:
+    """Check if a JWT bearer token is expired.
+    
+    Args:
+        token: JWT token (format: header.payload.signature)
+    
+    Returns:
+        True if token is expired or missing 'exp' claim, False otherwise
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return False  # Not a JWT, assume valid
+        
+        payload = parts[1]
+        # Add padding if needed for base64 decode
+        payload += "=" * (4 - len(payload) % 4)
+        
+        decoded = json.loads(base64.urlsafe_b64decode(payload))
+        exp = decoded.get("exp")
+        
+        if exp is None:
+            return False  # No expiry, assume valid
+        
+        # Token is expired if exp is in the past (with 10-second buffer)
+        return exp < (time.time() - 10)
+    except Exception as e:
+        logger.debug(f"Failed to decode JWT for expiry check: {e}")
+        return False  # If we can't decode, assume valid
+
+
 def _get_explicit_remote_auth(remote: RemoteBackendSettings) -> str | None:
     # Runtime env token is highest priority and re-evaluated per call.
     token = _get_remote_env(remote, "ACCESS_TOKEN")
     if token:
+        # Check if token is a JWT and if it's expired
+        if _is_jwt_expired(token):
+            logger.debug(f"Explicit bearer token for {remote.name} is expired, will attempt refresh")
+            return None  # Return None to trigger refresh flow below
         return token
 
     # Static remote.auth is lower priority and mainly a fallback.
     auth = _clean(remote.auth)
     if auth and auth != _AUTO_AUTH_SENTINEL:
+        if _is_jwt_expired(auth):
+            logger.debug(f"Static auth for {remote.name} is expired, will attempt refresh")
+            return None
         return auth
 
     return None
@@ -297,8 +338,6 @@ def _add_dpop_header_if_enabled(
         return headers
     except Exception as e:
         # Log DPoP error but don't break token flow
-        import logging
-        logger = logging.getLogger(__name__)
         logger.warning(f"Failed to generate DPoP proof: {e}")
         return headers
 
@@ -365,6 +404,9 @@ async def resolve_remote_auth(remote: RemoteBackendSettings) -> str | None:
     if cached:
         return cached
 
+    # Add OAuth 2.1 DPoP proof if enabled
+    headers = _add_dpop_header_if_enabled(headers, "POST", token_endpoint)
+
     timeout = httpx.Timeout(20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         resp = await client.post(token_endpoint, data=form, headers=headers)
@@ -395,6 +437,9 @@ async def resolve_remote_auth_force_refresh(remote: RemoteBackendSettings) -> st
 
     cache_key, token_endpoint, headers, form = request_parts
     _TOKEN_CACHE.pop(cache_key, None)
+
+    # Add OAuth 2.1 DPoP proof if enabled
+    headers = _add_dpop_header_if_enabled(headers, "POST", token_endpoint)
 
     timeout = httpx.Timeout(20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:

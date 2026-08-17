@@ -40,7 +40,15 @@ services:
       GOOGLE_WORKSPACE_MCP_OAUTH_REFRESH_TOKEN: ${GOOGLE_WORKSPACE_MCP_OAUTH_REFRESH_TOKEN:-}
       GOOGLE_WORKSPACE_MCP_OAUTH_SCOPE: ${GOOGLE_WORKSPACE_MCP_OAUTH_SCOPE:-}
       GOOGLE_WORKSPACE_MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHOD: ${GOOGLE_WORKSPACE_MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHOD:-client_secret_basic}
-      ANTICAFARMACIA_GATEWAY_REMOTES_JSON: '${ANTICAFARMACIA_GATEWAY_REMOTES_JSON:-[{"name":"google-workspace-mcp","namespace":"google_workspace_mcp","type":"streamable-http","url":"${GOOGLE_WORKSPACE_MCP_URL:-https://workspace.dchat.ditra.app/mcp}","auth":"${GOOGLE_WORKSPACE_MCP_BEARER_TOKEN:-__auto__}","initTimeout":20000,"timeout":60000,"serverInstructions":true,"enabled":true}]}'
+      GOOGLE_TOOLBOX_MCP_URL: ${GOOGLE_TOOLBOX_MCP_URL:-http://google-toolbox-mcp:8000/mcp}
+      GOOGLE_TOOLBOX_MCP_BEARER_TOKEN: ${GOOGLE_TOOLBOX_MCP_BEARER_TOKEN:-}
+      ANTICAFARMACIA_GATEWAY_ENABLE_GOOGLE_TOOLBOX_MCP: ${ANTICAFARMACIA_GATEWAY_ENABLE_GOOGLE_TOOLBOX_MCP:-false}
+      ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_URL: ${ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_URL:-${GOOGLE_TOOLBOX_MCP_URL:-http://google-toolbox-mcp:8000/mcp}}
+      ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_AUTH: ${ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_AUTH:-${GOOGLE_TOOLBOX_MCP_BEARER_TOKEN:-}}
+      ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_INIT_TIMEOUT_MS: ${ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_INIT_TIMEOUT_MS:-20000}
+      ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_TIMEOUT_MS: ${ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_TIMEOUT_MS:-60000}
+      ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_SERVER_INSTRUCTIONS: ${ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_SERVER_INSTRUCTIONS:-true}
+      ANTICAFARMACIA_GATEWAY_REMOTES_JSON: '${ANTICAFARMACIA_GATEWAY_REMOTES_JSON:-[{"name":"google-workspace-mcp","namespace":"google_workspace_mcp","type":"streamable-http","url":"${GOOGLE_WORKSPACE_MCP_URL:-https://workspace.dchat.ditra.app/mcp}","auth":"${GOOGLE_WORKSPACE_MCP_BEARER_TOKEN:-__auto__}","initTimeout":20000,"timeout":60000,"serverInstructions":true,"enabled":true},{"name":"google-toolbox-mcp","namespace":"google_toolbox_mcp","type":"streamable-http","url":"${GOOGLE_TOOLBOX_MCP_URL:-http://google-toolbox-mcp:8000/mcp}","auth":"${GOOGLE_TOOLBOX_MCP_BEARER_TOKEN:-}","initTimeout":20000,"timeout":60000,"serverInstructions":true,"enabled":false}]}'
       ANTICAFARMACIA_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON: ${ANTICAFARMACIA_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON:-}
 
       # ============================================================================
@@ -196,7 +204,7 @@ services:
 
     restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${FASTMCP_PORT:-8002}/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3

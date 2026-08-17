@@ -5,7 +5,7 @@ set -euo pipefail
 # Mirror ferreromed/api/app/build.sh style for deployment builds
 PROJECT_ID="oxytrack-322814"
 IMAGE_NAME="ditra-anticafarmacia-mcp"
-TAG="1.0.0"
+TAG="1.0.2"
 TAG_NAME="gcr.io/$PROJECT_ID/$IMAGE_NAME:$TAG"
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
