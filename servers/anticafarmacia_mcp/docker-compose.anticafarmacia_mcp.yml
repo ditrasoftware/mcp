@@ -3,8 +3,8 @@
 # Loads all settings from .env_anticafarmacia_mcp file.
 services:
   anticafarmacia_mcp:
-    # Deployment image built by build.sh (TAG=1.0.1)
-    image: ${ANTICAFARMACIA_MCP_IMAGE:-gcr.io/oxytrack-322814/ditra-anticafarmacia-mcp:1.0.1}
+    # Deployment image built by build.sh (VERSION from VERSION file, defaults to 1.0.4)
+    image: ${ANTICAFARMACIA_MCP_IMAGE:-gcr.io/oxytrack-322814/ditra-anticafarmacia-mcp:1.0.4}
     pull_policy: always
     container_name: anticafarmacia-mcp
     environment:
@@ -25,6 +25,12 @@ services:
       ANTICAFARMACIA_GATEWAY_ALLOW_DIRECT_CALLS: ${ANTICAFARMACIA_GATEWAY_ALLOW_DIRECT_CALLS:-true}
       ANTICAFARMACIA_GATEWAY_DIRECT_RESULT_STRATEGY: ${ANTICAFARMACIA_GATEWAY_DIRECT_RESULT_STRATEGY:-passthrough}
       ANTICAFARMACIA_GATEWAY_ENABLE_TOOLBOX: ${ANTICAFARMACIA_GATEWAY_ENABLE_TOOLBOX:-false}
+      ANTICAFARMACIA_GATEWAY_ENABLE_DPOP_FOR_REMOTES: ${ANTICAFARMACIA_GATEWAY_ENABLE_DPOP_FOR_REMOTES:-false}
+      ANTICAFARMACIA_GATEWAY_REMOTE_AUTH_STORE_PATH: ${ANTICAFARMACIA_GATEWAY_REMOTE_AUTH_STORE_PATH:-/var/lib/anticafarmacia/remote-auth.json}
+      ANTICAFARMACIA_GATEWAY_DYNAMIC_AUTH_ONLY: ${ANTICAFARMACIA_GATEWAY_DYNAMIC_AUTH_ONLY:-false}
+      ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_ISSUERS: ${ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_ISSUERS:-}
+      ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_AUDIENCES: ${ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_AUDIENCES:-}
+      ANTICAFARMACIA_READINESS_REMOTE_PROBE: ${ANTICAFARMACIA_READINESS_REMOTE_PROBE:-auth}
       
       # Remote MCP endpoints (Google Workspace)
       GOOGLE_WORKSPACE_MCP_URL: ${GOOGLE_WORKSPACE_MCP_URL:-https://workspace.dchat.ditra.app/mcp}
@@ -171,6 +177,10 @@ services:
     ports:
       - "${ANTICAFARMACIA_MCP_HOST_PORT:-8094}:${FASTMCP_PORT:-8002}"
 
+    volumes:
+      - anticafarmacia_runtime:/var/lib/anticafarmacia
+      - anticafarmacia_fastmcp_home:/root/.local/share/fastmcp
+
     networks:
       - default
       - ditra-shared
@@ -187,3 +197,7 @@ networks:
   ditra-shared:
     external: true
     name: ditra-shared
+
+volumes:
+  anticafarmacia_runtime:
+  anticafarmacia_fastmcp_home:

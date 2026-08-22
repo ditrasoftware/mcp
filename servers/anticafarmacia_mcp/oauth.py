@@ -19,6 +19,7 @@ from fastmcp.server.auth import AuthProvider
 from fastmcp.server.auth.auth import RemoteAuthProvider
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from mcp.shared.auth import OAuthClientInformationFull
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from starlette.middleware import Middleware
@@ -102,6 +103,110 @@ def _env_list(name: str) -> list[str] | None:
     return parts or None
 
 
+class _ResilientOIDCProxy(OIDCProxy):
+    """OIDC proxy with best-effort auto-registration for stale client IDs."""
+
+    def _auto_register_enabled(self) -> bool:
+        return _env_bool("ANTICAFARMACIA_OIDC_AUTO_REGISTER_ON_AUTHORIZE", True)
+
+    @staticmethod
+    def _looks_like_unregistered_client(response: Response) -> bool:
+        if response.status_code != 400:
+            return False
+        body = getattr(response, "body", b"")
+        if isinstance(body, (bytes, bytearray)):
+            text = body.decode("utf-8", errors="ignore").lower()
+            markers = (
+                "client not registered",
+                "unregistered client_id",
+                "client not found",
+                "not registered",
+                "not found",
+            )
+            return any(marker in text for marker in markers)
+        return False
+
+    @staticmethod
+    def _extract_get_authorize_params(request: Request) -> tuple[str | None, str | None]:
+        if request.method != "GET":
+            return None, None
+        client_id = (request.query_params.get("client_id") or "").strip() or None
+        redirect_uri = (request.query_params.get("redirect_uri") or "").strip() or None
+        return client_id, redirect_uri
+
+    async def _try_auto_register_from_authorize(self, request: Request) -> bool:
+        client_id, redirect_uri = self._extract_get_authorize_params(request)
+        if not client_id or not redirect_uri:
+            return False
+
+        try:
+            await self.register_client(
+                OAuthClientInformationFull(
+                    client_id=client_id,
+                    redirect_uris=[redirect_uri],
+                    grant_types=["authorization_code", "refresh_token"],
+                    token_endpoint_auth_method="none",
+                    application_type="native",
+                )
+            )
+            logger.warning(
+                "OIDC auto-register succeeded for previously unknown client_id=%s redirect_uri=%s",
+                client_id,
+                redirect_uri,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "OIDC auto-register failed for client_id=%s redirect_uri=%s error=%s",
+                client_id,
+                redirect_uri,
+                exc,
+            )
+            return False
+
+    def get_routes(self, mcp_path: str | None = None) -> list[Route]:
+        routes = super().get_routes(mcp_path)
+        if not self._auto_register_enabled():
+            return routes
+
+        for idx, route in enumerate(routes):
+            if not (
+                isinstance(route, Route)
+                and route.path == "/authorize"
+                and route.methods is not None
+                and ("GET" in route.methods or "POST" in route.methods)
+            ):
+                continue
+
+            original_endpoint = route.endpoint
+            methods = sorted(route.methods) if route.methods else ["GET", "POST"]
+
+            async def _resilient_authorize(
+                request: Request,
+                _orig=original_endpoint,
+            ) -> Response:
+                response = await _orig(request)
+                if request.method != "GET":
+                    return response
+                client_id, redirect_uri = self._extract_get_authorize_params(request)
+                if response.status_code != 400 or not client_id or not redirect_uri:
+                    return response
+                if not self._looks_like_unregistered_client(response):
+                    logger.debug(
+                        "OIDC authorize returned 400 for client_id=%s redirect_uri=%s; attempting compat auto-register",
+                        client_id,
+                        redirect_uri,
+                    )
+                if not await self._try_auto_register_from_authorize(request):
+                    return response
+                return await _orig(request)
+
+            routes[idx] = Route(path=route.path, endpoint=_resilient_authorize, methods=methods)
+            break
+
+        return routes
+
+
 def create_auth_provider() -> AuthProvider | None:
     """Create an optional FastMCP AuthProvider from environment.
 
@@ -151,7 +256,7 @@ def create_auth_provider() -> AuthProvider | None:
         verify_id_token = _env_bool("ANTICAFARMACIA_OIDC_VERIFY_ID_TOKEN", False)
         token_endpoint_auth_method = _env("ANTICAFARMACIA_OIDC_TOKEN_ENDPOINT_AUTH_METHOD")
 
-        return OIDCProxy(
+        return _ResilientOIDCProxy(
             config_url=config_url,
             client_id=client_id,
             client_secret=client_secret,

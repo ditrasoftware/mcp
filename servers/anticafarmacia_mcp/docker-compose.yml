@@ -3,8 +3,8 @@
 # For local development/MCP-focused testing, use docker-compose-mcp.yml instead.
 services:
   anticafarmacia_mcp:
-    # Deployment image built by build.sh (TAG=1.0.1)
-    image: ${ANTICAFARMACIA_MCP_IMAGE:-gcr.io/oxytrack-322814/ditra-anticafarmacia-mcp:1.0.1}
+    # Deployment image built by build.sh (VERSION from VERSION file, defaults to 1.0.4)
+    image: ${ANTICAFARMACIA_MCP_IMAGE:-gcr.io/oxytrack-322814/ditra-anticafarmacia-mcp:1.0.4}
     pull_policy: always
     container_name: anticafarmacia-mcp
     environment:
@@ -30,6 +30,11 @@ services:
       ANTICAFARMACIA_GATEWAY_DIRECT_RESULT_STRATEGY: ${ANTICAFARMACIA_GATEWAY_DIRECT_RESULT_STRATEGY:-passthrough}
       ANTICAFARMACIA_GATEWAY_ENABLE_TOOLBOX: ${ANTICAFARMACIA_GATEWAY_ENABLE_TOOLBOX:-false}
       ANTICAFARMACIA_GATEWAY_ENABLE_DPOP_FOR_REMOTES: ${ANTICAFARMACIA_GATEWAY_ENABLE_DPOP_FOR_REMOTES:-false}
+      ANTICAFARMACIA_GATEWAY_REMOTE_AUTH_STORE_PATH: ${ANTICAFARMACIA_GATEWAY_REMOTE_AUTH_STORE_PATH:-/var/lib/anticafarmacia/remote-auth.json}
+      ANTICAFARMACIA_GATEWAY_DYNAMIC_AUTH_ONLY: ${ANTICAFARMACIA_GATEWAY_DYNAMIC_AUTH_ONLY:-false}
+      ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_ISSUERS: ${ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_ISSUERS:-}
+      ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_AUDIENCES: ${ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_AUDIENCES:-}
+      ANTICAFARMACIA_READINESS_REMOTE_PROBE: ${ANTICAFARMACIA_READINESS_REMOTE_PROBE:-auth}
       
       # Remote MCP endpoints (Google Workspace)
       GOOGLE_WORKSPACE_MCP_URL: ${GOOGLE_WORKSPACE_MCP_URL:-https://workspace.dchat.ditra.app/mcp}
@@ -80,6 +85,15 @@ services:
       ANTICAFARMACIA_OIDC_ALLOWED_CLIENT_REDIRECT_URIS: ${ANTICAFARMACIA_OIDC_ALLOWED_CLIENT_REDIRECT_URIS:-}
       ANTICAFARMACIA_OIDC_VERIFY_ID_TOKEN: ${ANTICAFARMACIA_OIDC_VERIFY_ID_TOKEN:-false}
       ANTICAFARMACIA_OIDC_TOKEN_ENDPOINT_AUTH_METHOD: ${ANTICAFARMACIA_OIDC_TOKEN_ENDPOINT_AUTH_METHOD:-client_secret_post}
+
+      # ============================================================================
+      # Local OAuth Client Registration (for dChat and other OAuth clients)
+      # ============================================================================
+      ANTICAFARMACIA_OAUTH_SIGNING_SECRET: ${ANTICAFARMACIA_OAUTH_SIGNING_SECRET:-}
+      ANTICAFARMACIA_OAUTH_ALLOWED_CLIENT_IDS: ${ANTICAFARMACIA_OAUTH_ALLOWED_CLIENT_IDS:-}
+      ANTICAFARMACIA_OAUTH_ALLOWED_REDIRECT_URIS: ${ANTICAFARMACIA_OAUTH_ALLOWED_REDIRECT_URIS:-}
+      ANTICAFARMACIA_OAUTH_ACCESS_TOKEN_TTL_SECONDS: ${ANTICAFARMACIA_OAUTH_ACCESS_TOKEN_TTL_SECONDS:-3600}
+      ANTICAFARMACIA_OAUTH_CODE_TTL_SECONDS: ${ANTICAFARMACIA_OAUTH_CODE_TTL_SECONDS:-180}
 
       # ============================================================================
       # OAuth 2.1 Security (PKCE, DPoP, Token Binding)
@@ -198,6 +212,10 @@ services:
     ports:
       - "${ANTICAFARMACIA_MCP_HOST_PORT:-8094}:${FASTMCP_PORT:-8002}"
 
+    volumes:
+      - anticafarmacia_runtime:/var/lib/anticafarmacia
+      - anticafarmacia_fastmcp_home:/root/.local/share/fastmcp
+
     networks:
       - default
       - ditra-shared
@@ -214,3 +232,7 @@ networks:
   ditra-shared:
     external: true
     name: ditra-shared
+
+volumes:
+  anticafarmacia_runtime:
+  anticafarmacia_fastmcp_home:
