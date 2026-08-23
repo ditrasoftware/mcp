@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Architecture and Gateway Design Docs
+    url: https://github.com/ditrasoftware/mcp/tree/main/design
+    about: Use this for design context before opening proposals.

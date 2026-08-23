@@ -5,6 +5,7 @@ import base64
 import os
 import re
 import time
+import json
 from typing import Any
 
 from fastmcp import FastMCP
@@ -21,6 +22,13 @@ from .rest_client import AnticaFarmaciaAuth, AnticaFarmaciaRestClient
 from .settings import get_settings
 from .maps import register_maps
 from .oauth import create_auth_provider
+from .middleware import (
+    TenantResolutionMiddleware,
+    AuthEnforcementMiddleware,
+    ErrorNormalizationMiddleware,
+    ObservabilityMiddleware,
+)
+from .capability import load_capability_registry
 from .gateway import (
     call_remote_tool_direct,
     list_remote_tool_names,
@@ -33,8 +41,14 @@ from .gateway import (
     discover_remote_tools_with_resilience,
     call_remote_tool_with_resilience,
     GatewayResilienceManager,
+    enable_dpop_for_remote_auth,
+    clear_remote_auth_cache,
+    clear_remote_runtime_auth_secrets,
+    get_remote_auth_runtime_status,
+    resolve_remote_auth,
+    resolve_remote_auth_force_refresh,
 )
-from .providers import (
+from .artifacts import (
     create_local_app_providers,
     register_local_prompts,
     register_local_resources,
@@ -365,6 +379,15 @@ def _resolve_remote_route(
 def create_mcp() -> FastMCP:
     settings = get_settings()
     client = AnticaFarmaciaRestClient(settings)
+    load_capability_registry()
+
+    dpop_enabled_for_remotes = (
+        (os.getenv("ANTICAFARMACIA_GATEWAY_ENABLE_DPOP_FOR_REMOTES") or "false")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "y", "on"}
+    )
+    enable_dpop_for_remote_auth(dpop_enabled_for_remotes)
 
     app_providers, local_app_registry = create_local_app_providers(client, settings)
 
@@ -484,6 +507,11 @@ def create_mcp() -> FastMCP:
                         seen.add(hashed)
             return tools
 
+    # Register enterprise middleware stack (order matters)
+    mcp.add_middleware(ObservabilityMiddleware())
+    mcp.add_middleware(TenantResolutionMiddleware())
+    mcp.add_middleware(AuthEnforcementMiddleware())
+    mcp.add_middleware(ErrorNormalizationMiddleware())
     mcp.add_middleware(_StripToolHashMiddleware())
 
     # Health check endpoint for HTTP transport (useful for load balancers, Kubernetes)
@@ -494,17 +522,43 @@ def create_mcp() -> FastMCP:
 
     @mcp.custom_route("/ready", methods=["GET"])
     async def readiness_check(request: Request) -> JSONResponse:
-        """Readiness check endpoint with lightweight configuration details."""
-        return JSONResponse(
-            {
-                "status": "ready",
-                "api_base_url_configured": bool(settings.api_base_url),
-                "gateway_mode": settings.gateway.mode,
-                "route_policy": settings.gateway.route_policy,
-                "configured_remotes": len(settings.gateway.remotes),
-                "mounted_remotes": len(mounted_remotes),
-            }
-        )
+        """Readiness check endpoint with optional downstream auth/backend probes."""
+        probe_mode = _env_mode("ANTICAFARMACIA_READINESS_REMOTE_PROBE", "auth")
+        if probe_mode not in {"none", "auth", "list_tools"}:
+            probe_mode = "auth"
+
+        remote_checks: list[dict[str, Any]] = []
+        if probe_mode != "none":
+            for remote in settings.gateway.remotes:
+                if not remote.enabled:
+                    continue
+                try:
+                    if probe_mode == "list_tools":
+                        await probe_remote_backend(settings.gateway, remote_name=remote.name)
+                    else:
+                        await resolve_remote_auth(remote)
+                    remote_checks.append({"name": remote.name, "healthy": True})
+                except Exception as exc:
+                    remote_checks.append(
+                        {
+                            "name": remote.name,
+                            "healthy": False,
+                            "error": str(exc),
+                        }
+                    )
+
+        has_unhealthy_remote = any(not item.get("healthy", False) for item in remote_checks)
+        payload = {
+            "status": "ready" if not has_unhealthy_remote else "degraded",
+            "api_base_url_configured": bool(settings.api_base_url),
+            "gateway_mode": settings.gateway.mode,
+            "route_policy": settings.gateway.route_policy,
+            "configured_remotes": len(settings.gateway.remotes),
+            "mounted_remotes": len(mounted_remotes),
+            "readiness_probe_mode": probe_mode,
+            "remote_checks": remote_checks,
+        }
+        return JSONResponse(payload, status_code=200 if not has_unhealthy_remote else 503)
 
     # Resources + prompts
     local_resource_registry = register_local_resources(mcp, client, settings)
@@ -775,25 +829,245 @@ def create_mcp() -> FastMCP:
         Local tools are ALWAYS available regardless of remote health.
         """
         health_status = resilience_mgr.get_all_health_status()
+        health_by_name = {h.remote_name: h for h in health_status.values()}
+
+        rows: list[dict[str, Any]] = []
+        for remote in settings.gateway.remotes:
+            health = health_by_name.get(remote.name)
+            if health is not None:
+                rows.append(
+                    {
+                        "name": health.remote_name,
+                        "namespace": health.remote_namespace,
+                        "enabled": health.enabled,
+                        "reachable": health.reachable,
+                        "error": health.error,
+                        "circuit_state": health.circuit_state.value,
+                        "failure_count": health.failure_count,
+                        "last_failure_time": health.last_failure_time,
+                        "last_success_time": health.last_success_time,
+                        "latency_ms": health.latency_ms,
+                    }
+                )
+                continue
+
+            # Fallback live probe keeps UI accurate when resilience cache is cold.
+            try:
+                probe = await probe_remote_backend(settings.gateway, remote_name=remote.name)
+                rows.append(
+                    {
+                        "name": remote.name,
+                        "namespace": remote.namespace,
+                        "enabled": True,
+                        "reachable": bool(probe.get("healthy", False)),
+                        "error": probe.get("error"),
+                        "circuit_state": "unknown",
+                        "failure_count": 0,
+                        "last_failure_time": None,
+                        "last_success_time": None,
+                        "latency_ms": None,
+                    }
+                )
+            except Exception as exc:
+                rows.append(
+                    {
+                        "name": remote.name,
+                        "namespace": remote.namespace,
+                        "enabled": True,
+                        "reachable": False,
+                        "error": str(exc),
+                        "circuit_state": "unknown",
+                        "failure_count": 0,
+                        "last_failure_time": None,
+                        "last_success_time": None,
+                        "latency_ms": None,
+                    }
+                )
+
+        healthy_count = len([r for r in rows if r.get("reachable")])
         return {
             "timestamp": time.time(),
-            "remotes": [
-                {
-                    "name": health.remote_name,
-                    "namespace": health.remote_namespace,
-                    "enabled": health.enabled,
-                    "reachable": health.reachable,
-                    "error": health.error,
-                    "circuit_state": health.circuit_state.value,
-                    "failure_count": health.failure_count,
-                    "last_failure_time": health.last_failure_time,
-                    "last_success_time": health.last_success_time,
-                    "latency_ms": health.latency_ms,
-                }
-                for health in health_status.values()
-            ],
+            "remotes": rows,
             "local_tools_available": True,
-            "summary": f"{len([h for h in health_status.values() if h.reachable])}/{len(health_status)} remotes healthy",
+            "summary": f"{healthy_count}/{len(rows)} remotes healthy",
+        }
+
+    def _find_remote_by_name(remote_name: str):
+        for remote in settings.gateway.remotes:
+            if remote.name == remote_name:
+                return remote
+        return None
+
+    @mcp.tool()
+    async def gateway_remote_auth_status(remote_name: str | None = None) -> dict[str, Any]:
+        """Inspect runtime outbound auth state for one or all remotes."""
+        targets = [remote_name] if remote_name else list_remote_tool_names(settings.gateway)
+        statuses: list[dict[str, Any]] = []
+
+        for name in targets:
+            remote = _find_remote_by_name(name)
+            if remote is None:
+                statuses.append({"remote_name": name, "error": "unknown remote"})
+                continue
+            statuses.append(get_remote_auth_runtime_status(remote))
+
+        return {
+            "dpop_enabled_for_remotes": dpop_enabled_for_remotes,
+            "runtime_store_path": os.getenv("ANTICAFARMACIA_GATEWAY_REMOTE_AUTH_STORE_PATH"),
+            "results": statuses,
+        }
+
+    @mcp.tool()
+    async def gateway_console_status() -> dict[str, Any]:
+        """Return operator-friendly consolidated status for the AnticaFarmacia console."""
+        health_status = resilience_mgr.get_all_health_status()
+        health_by_name = {h.remote_name: h for h in health_status.values()}
+
+        connected_services: list[dict[str, Any]] = []
+        connection_health: list[dict[str, Any]] = []
+        authentication_rows: list[dict[str, Any]] = []
+
+        connected_count = 0
+        auth_ready_count = 0
+
+        for remote in settings.gateway.remotes:
+            connected_services.append(
+                {
+                    "name": remote.name,
+                    "namespace": remote.namespace,
+                    "url": remote.url,
+                }
+            )
+
+            health = health_by_name.get(remote.name)
+            if health is None:
+                try:
+                    probe = await probe_remote_backend(settings.gateway, remote_name=remote.name)
+                    is_healthy = bool(probe.get("healthy", False))
+                    reachable = is_healthy
+                    circuit_state = "unknown"
+                    failure_count = 0
+                    latency_ms = "-"
+                    error = probe.get("error")
+                    if is_healthy:
+                        service_state = "Connected"
+                        connected_count += 1
+                    else:
+                        service_state = "Connection issue"
+                except Exception as exc:
+                    service_state = "Status unavailable"
+                    reachable = "unknown"
+                    circuit_state = "unknown"
+                    failure_count = 0
+                    latency_ms = "-"
+                    error = f"Diagnostics unavailable: {exc}"
+            else:
+                reachable = health.reachable
+                circuit_state = health.circuit_state.value
+                failure_count = health.failure_count
+                latency_ms = health.latency_ms if health.latency_ms is not None else "-"
+                error = health.error
+
+                if health.reachable and health.circuit_state.value == "closed":
+                    service_state = "Connected"
+                    connected_count += 1
+                elif health.reachable:
+                    service_state = "Degraded"
+                else:
+                    service_state = "Connection issue"
+
+            connection_health.append(
+                {
+                    "name": remote.name,
+                    "service_state": service_state,
+                    "reachable": reachable,
+                    "circuit_state": circuit_state,
+                    "failure_count": failure_count,
+                    "latency_ms": latency_ms,
+                    "error": error,
+                }
+            )
+
+            auth_runtime = get_remote_auth_runtime_status(remote)
+            auth_ready = bool(
+                auth_runtime.get("configured")
+                or auth_runtime.get("runtime_access_token_present")
+                or auth_runtime.get("runtime_refresh_token_present")
+            )
+            if auth_ready:
+                auth_ready_count += 1
+
+            authentication_rows.append(auth_runtime)
+
+        if connected_count == len(settings.gateway.remotes) and auth_ready_count == len(settings.gateway.remotes):
+            overall_status = "Operational"
+        elif connected_count > 0:
+            overall_status = "Attention Required"
+        else:
+            overall_status = "Degraded"
+
+        authentication_status = (
+            "Ready"
+            if auth_ready_count == len(settings.gateway.remotes)
+            else "Review Required"
+        )
+
+        registry_payload = await registry_summary()
+        local_tools = registry_payload.get("local", {}).get("tools", {})
+        local_prompts = registry_payload.get("local", {}).get("prompts", {})
+        local_resources = registry_payload.get("local", {}).get("resources", {})
+
+        local_tool_count = int(local_tools.get("count", 0))
+        local_prompt_count = len(local_prompts.get("names", [])) if isinstance(local_prompts, dict) else 0
+        local_resource_count = len(local_resources.get("names", [])) if isinstance(local_resources, dict) else 0
+
+        registry_overview = (
+            "Local App: AnticaFarmacia\n"
+            f"Local Capabilities: {local_tool_count} tools / {local_prompt_count} prompts / {local_resource_count} resources\n"
+            f"Connected Services: {', '.join(r['name'] for r in connected_services) if connected_services else 'none'}\n"
+            f"Routing: {settings.gateway.route_policy}"
+        )
+
+        return {
+            "overall_status": overall_status,
+            "local_mcp_status": "Healthy",
+            "google_workspace_status": (
+                "Connected" if any(r.get("name") == "google-workspace-mcp" and r.get("service_state") == "Connected" for r in connection_health)
+                else "Review Required"
+            ),
+            "authentication_status": authentication_status,
+            "last_checked": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+            "connected_services": connected_services,
+            "connection_health": connection_health,
+            "authentication_rows": authentication_rows,
+            "registry_overview": registry_overview,
+            "registry_json": json.dumps(registry_payload, indent=2, ensure_ascii=True),
+        }
+
+    @mcp.tool()
+    async def gateway_remote_auth_recover(
+        remote_name: str,
+        clear_runtime_secrets: bool = False,
+    ) -> dict[str, Any]:
+        """Force auth recovery for one remote without restarting MCP."""
+        remote = _find_remote_by_name(remote_name)
+        if remote is None:
+            raise ValueError(f"Unknown remote backend: {remote_name}")
+
+        clear_remote_auth_cache(remote)
+        if clear_runtime_secrets:
+            clear_remote_runtime_auth_secrets(remote)
+
+        token = await resolve_remote_auth_force_refresh(
+            remote,
+            ignore_explicit_auth=True,
+        )
+        status = get_remote_auth_runtime_status(remote)
+        return {
+            "remote_name": remote_name,
+            "token_refreshed": bool(token),
+            "clear_runtime_secrets": clear_runtime_secrets,
+            "status": status,
         }
 
     local_tool_names = register_local_tools(
@@ -841,6 +1115,12 @@ def create_mcp() -> FastMCP:
                 ],
             },
         }
+
+    @mcp.tool()
+    async def registry_summary_text() -> str:
+        """Return registry summary as pretty JSON text for UI text areas."""
+        payload = await registry_summary()
+        return json.dumps(payload, indent=2, ensure_ascii=True)
 
     return mcp
 

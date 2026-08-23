@@ -1,0 +1,124 @@
+name: Feature Proposal
+description: Propose a new capability with clear goals, tradeoffs, and rollout plan
+title: "feat: "
+labels:
+  - type:feature
+  - status:proposal
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for new capabilities. Keep scope explicit and link related design or ADR docs.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence proposal summary
+      placeholder: Add federated connector strategy registry for downstream MCP backends
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or platform limitation are we solving?
+      placeholder: Current gateway implementation is hard-coded to streamable-http and requires code edits for new connector types
+    validations:
+      required: true
+
+  - type: textarea
+    id: goals
+    attributes:
+      label: Goals
+      description: What must be true when this is done?
+      placeholder: |
+        - Add pluggable connector interface
+        - Preserve current behavior by default
+        - Support per-remote strategy config
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-Goals
+      description: What is intentionally out of scope?
+      placeholder: Full policy engine rewrite
+
+  - type: textarea
+    id: options
+    attributes:
+      label: Options Considered
+      description: Include alternatives and why they were not selected
+      placeholder: |
+        1) Extend direct.py conditionals
+        2) Introduce strategy registry (selected)
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_approach
+    attributes:
+      label: Proposed Approach
+      description: Architecture, interfaces, migration notes
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: User, ops, security, performance, and compatibility impact
+      placeholder: |
+        Users: no breaking API changes
+        Ops: new env keys for strategy selection
+        Security: no token propagation by default
+        Performance: one-time catalog cache warmup
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and Mitigations
+      description: Key implementation and rollout risks
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollout
+    attributes:
+      label: Rollout Plan
+      description: Concrete staged rollout plan
+      placeholder: |
+        1. Add interface and streamable-http adapter
+        2. Wire settings parser
+        3. Enable one backend
+        4. Expand to all backends
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: Tests and success criteria
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback Plan
+      description: How to safely back out
+    validations:
+      required: true
+
+  - type: input
+    id: linked_artifacts
+    attributes:
+      label: Linked Artifacts
+      description: Design docs, ADRs, related issues/PRs
+      placeholder: design/open-question-1-tool-surface/design.md

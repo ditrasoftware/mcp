@@ -27,15 +27,28 @@ anticafarmacia_mcp/
 │   ├── direct.py
 │   ├── proxy.py
 │   └── remote_auth.py       # Remote MCP auth with DPoP support
-├── providers/
+├── artifacts/               # Canonical artifact registrations by type/source
 │   ├── __init__.py
-│   ├── local_tools.py       # Domain-specific tools (TODO)
-│   ├── local_resources.py   # Domain-specific resources (TODO)
-│   ├── local_prompts.py     # Domain-specific prompts (TODO)
-│   └── local_apps.py        # Domain-specific UI apps (TODO)
-├── apps/                    # Prefab UI apps (empty)
-├── prompts/                 # Prompt templates (empty)
-├── resources/               # Resource definitions (empty)
+│   ├── tools/
+│   │   ├── local.py
+│   │   └── federated.py
+│   ├── resources/
+│   │   ├── local.py
+│   │   └── federated.py
+│   ├── prompts/
+│   │   ├── local.py
+│   │   └── federated.py
+│   └── apps/
+│       ├── local.py
+│       └── federated.py
+├── providers/               # Compatibility wrappers + adapters
+│   ├── __init__.py
+│   ├── local_tools.py
+│   ├── local_resources.py
+│   ├── local_prompts.py
+│   └── local_apps.py
+├── middleware/              # Observability, tenant, auth, error normalization
+├── capability/              # Capability contracts and taxonomy
 ├── Dockerfile               # Docker image (FastMCP 4.0.0b2)
 ├── build.sh                 # Build & push script
 ├── fastmcp.json             # FastMCP configuration
@@ -82,11 +95,30 @@ export ANTICAFARMACIA_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON='{
   "my_remote_tool": "remote"
 }'
 
+# Optional: bootstrap-free outbound auth mode
+# When true, static env access/refresh tokens are ignored and credentials
+# must be injected at runtime (request headers or runtime auth store).
+export ANTICAFARMACIA_GATEWAY_DYNAMIC_AUTH_ONLY=true
+
+# Optional: enforce trusted issuer/audience for runtime JWT credentials.
+export ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_ISSUERS="https://workspace.dchat.ditra.app/"
+export ANTICAFARMACIA_GATEWAY_RUNTIME_AUTH_TRUSTED_AUDIENCES="https://workspace.dchat.ditra.app/mcp"
+
 # FastMCP settings
 export FASTMCP_HOST=0.0.0.0
 export FASTMCP_PORT=8001
 export FASTMCP_STREAMABLE_HTTP_PATH=/mcp
 ```
+
+Runtime credential injection headers (per remote):
+
+- `x-remote-<remote-name>-access-token`
+- `x-remote-<remote-name>-refresh-token`
+- `x-remote-<remote-name>-client-id`
+- `x-remote-<remote-name>-client-secret`
+
+Generic fallback headers are also supported (`x-remote-access-token`, etc.), but
+per-remote headers are recommended for multi-remote orchestration.
 
 ### 2. Install Dependencies
 
@@ -98,11 +130,52 @@ pip install "fastmcp[apps]==4.0.0" "prefab-ui==0.19.1" "httpx>=0.27.0"
 
 Edit the TODO sections in:
 
-- `providers/local_tools.py` - Add your domain-specific tools
-- `providers/local_resources.py` - Add domain-specific resources (e.g., OpenAPI schemas)
-- `providers/local_prompts.py` - Add reusable agent prompts
-- `providers/local_apps.py` - Add Prefab UI console apps
+- `artifacts/tools/local.py` - Add your domain-specific tools
+- `artifacts/resources/local.py` - Add domain-specific resources (e.g., OpenAPI schemas)
+- `artifacts/prompts/local.py` - Add reusable agent prompts
+- `artifacts/apps/local.py` - Add Prefab UI console apps
 - `maps.py` - Add mapping/location resources (optional)
+
+## 1.0.4+ Architecture
+
+- **Artifact-First**: Canonical artifact registration via `artifacts/*/local.py`
+- **Single Release Version Source**: `VERSION` file drives build tag and capability contract version
+- **No Legacy Compatibility**: All `FERREROMED_*` env vars removed; exclusively use `ANTICAFARMACIA_*`
+- **Settings Naming**: Configuration class renamed to `AnticaFarmaciaSettings` (canonical)
+- **RBAC Scope Prefix**: Now `anticafarmacia:` (was hardcoded to support multiple deployments)
+- **Enterprise Middleware Stack** (order matters):
+  1. Observability (request/response tracking)
+  2. Tenant resolution (multi-tenant context)
+  3. Auth enforcement (OIDC, API key, OAuth 2.1)
+  4. Error normalization (standard error format)
+  5. Tool-hash compatibility middleware (FastMCP 4.0.x)
+- **Capability Registry**: Loaded at startup; see `capability/registry.py` for tool contracts
+- **Skills Integration**: See [SKILLS_INTEGRATION.md](SKILLS_INTEGRATION.md) for google_workspace_mcp reference and federated skill discovery patterns
+
+### Version Bump Workflow
+
+For release bumps, update one place:
+
+```bash
+./set_version.sh 1.0.5
+```
+
+This updates:
+
+1. `VERSION`
+2. `.env_example` (`ANTICAFARMACIA_MCP_VERSION`)
+
+`build.sh` reads from `VERSION`, and deployment compose files read image version via
+`ANTICAFARMACIA_MCP_VERSION`.
+
+### Migration from Earlier Versions
+
+If upgrading from pre-1.0.4:
+
+1. **Update all env vars**: Replace `FERREROMED_*` with `ANTICAFARMACIA_*` in your `.env` and deployment configs
+2. **Update docker-compose**: Already standardized on `ANTICAFARMACIA_*` in compose templates
+3. **Review settings.py**: No backward-compatibility bridge; ensure all config is under the new prefix
+4. **Check auth builders**: Phase 1-4 builders now exclusively read `ANTICAFARMACIA_*` env vars
 
 ### 4. Run the Server
 
@@ -212,6 +285,7 @@ export ANTICAFARMACIA_MCP_AUTH_MODE=oidc_proxy
 export ANTICAFARMACIA_OIDC_CONFIG_URL=https://accounts.google.com/.well-known/openid-configuration
 export ANTICAFARMACIA_OIDC_CLIENT_ID=${ANTICAFARMACIA_GCIP_CLIENT_ID}
 export ANTICAFARMACIA_OIDC_CLIENT_SECRET=${ANTICAFARMACIA_GCIP_CLIENT_SECRET}
+export ANTICAFARMACIA_OIDC_AUTO_REGISTER_ON_AUTHORIZE=true
 
 # Multi-Tenant Settings
 export ANTICAFARMACIA_TENANT_ENABLED=true
@@ -219,6 +293,12 @@ export ANTICAFARMACIA_TENANT_EXTRACT_CLAIM=organizations  # Primary claim
 export ANTICAFARMACIA_TENANT_FALLBACK_CLAIMS=org_id,organization_id,tenant_id
 export ANTICAFARMACIA_TENANT_FORWARD_TO_DOWNSTREAM=true  # Forward to remote MCPs
 ```
+
+Compatibility note:
+When `ANTICAFARMACIA_OIDC_AUTO_REGISTER_ON_AUTHORIZE=true`, the server will
+attempt a one-time automatic client registration if `/authorize` receives an
+unknown `client_id` and an allowed `redirect_uri`. This helps clients recover
+from stale local `client_id` state after server rebuilds or container resets.
 
 ### Tenant Context Forwarding
 

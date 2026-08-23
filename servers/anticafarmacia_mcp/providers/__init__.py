@@ -1,9 +1,14 @@
-"""Local provider modules for tools, resources, prompts, and apps."""
+"""Backward-compatible provider imports.
 
-from .local_tools import register_local_tools
-from .local_resources import register_local_resources
-from .local_prompts import register_local_prompts
-from .local_apps import create_local_app_providers
+Canonical artifact entrypoints now live under the artifacts package.
+"""
+
+from ..artifacts import (
+    create_local_app_providers,
+    register_local_prompts,
+    register_local_resources,
+    register_local_tools,
+)
 
 __all__ = [
     "register_local_tools",

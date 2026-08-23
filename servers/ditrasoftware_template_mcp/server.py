@@ -20,6 +20,13 @@ from .rest_client import DitraSoftwareAuth, DitraSoftwareRestClient
 from .settings import get_settings
 from .maps import register_maps
 from .oauth import create_auth_provider
+from .middleware import (
+    TenantResolutionMiddleware,
+    AuthEnforcementMiddleware,
+    ErrorNormalizationMiddleware,
+    ObservabilityMiddleware,
+)
+from .capability import load_capability_registry
 from .gateway import (
     call_remote_tool_direct,
     list_remote_tool_names,
@@ -27,7 +34,7 @@ from .gateway import (
     mount_remote_proxies,
     probe_remote_backend,
 )
-from .providers import (
+from .artifacts import (
     create_local_app_providers,
     register_local_prompts,
     register_local_resources,
@@ -462,6 +469,20 @@ def create_mcp() -> FastMCP:
                         seen.add(hashed)
             return tools
 
+    # Register enterprise middleware stack (order matters!)
+    # 1. Observability first (captures all requests)
+    mcp.add_middleware(ObservabilityMiddleware())
+    
+    # 2. Tenant resolution (needed by downstream middleware)
+    mcp.add_middleware(TenantResolutionMiddleware())
+    
+    # 3. Auth enforcement (needs tenant context)
+    mcp.add_middleware(AuthEnforcementMiddleware())
+    
+    # 4. Error normalization (catches all errors)
+    mcp.add_middleware(ErrorNormalizationMiddleware())
+    
+    # 5. FastMCP compatibility (tool hash stripping)
     mcp.add_middleware(_StripToolHashMiddleware())
 
     # Health check endpoint for HTTP transport (useful for load balancers, Kubernetes)

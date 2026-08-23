@@ -19,16 +19,30 @@ ditrasoftware_template_mcp/
 ├── settings.py              # Configuration
 ├── server.py                # MCP server + middleware
 ├── maps.py                  # Mapping/location resources (TODO)
-├── gateway/                 # Gateway implementation (copy from ferreromed_mcp)
-├── providers/
+├── artifacts/               # Canonical artifact registrations by type/source
 │   ├── __init__.py
-│   ├── local_tools.py       # Domain-specific tools (TODO)
-│   ├── local_resources.py   # Domain-specific resources (TODO)
-│   ├── local_prompts.py     # Domain-specific prompts (TODO)
-│   └── local_apps.py        # Domain-specific UI apps (TODO)
-├── apps/                    # Prefab UI apps (empty)
-├── prompts/                 # Prompt templates (empty)
-├── resources/               # Resource definitions (empty)
+│   ├── tools/
+│   │   ├── local.py
+│   │   └── federated.py
+│   ├── resources/
+│   │   ├── local.py
+│   │   └── federated.py
+│   ├── prompts/
+│   │   ├── local.py
+│   │   └── federated.py
+│   └── apps/
+│       ├── local.py
+│       └── federated.py
+├── gateway/                 # Gateway implementation (copy from ferreromed_mcp)
+├── providers/               # Compatibility wrappers + remote adapters
+│   ├── __init__.py
+│   ├── local_tools.py       # Backward-compatible wrapper
+│   ├── local_resources.py   # Backward-compatible wrapper
+│   ├── local_prompts.py     # Backward-compatible wrapper
+│   ├── local_apps.py        # Backward-compatible wrapper
+│   └── adapters/
+│       ├── __init__.py
+│       └── base.py
 ├── Dockerfile               # Docker image
 ├── build.sh                 # Build script
 ├── fastmcp.json             # FastMCP configuration
@@ -87,10 +101,10 @@ pip install "fastmcp[apps]==4.0.0" "prefab-ui==0.19.1" "httpx>=0.27.0"
 
 Edit the TODO sections in:
 
-- `providers/local_tools.py` - Add your domain-specific tools
-- `providers/local_resources.py` - Add domain-specific resources (e.g., OpenAPI schemas)
-- `providers/local_prompts.py` - Add reusable agent prompts
-- `providers/local_apps.py` - Add Prefab UI console apps
+- `artifacts/tools/local.py` - Add your domain-specific tools
+- `artifacts/resources/local.py` - Add domain-specific resources (e.g., OpenAPI schemas)
+- `artifacts/prompts/local.py` - Add reusable agent prompts
+- `artifacts/apps/local.py` - Add Prefab UI console apps
 - `maps.py` - Add mapping/location resources (optional)
 
 ### 4. Run the Server
@@ -226,11 +240,11 @@ cd my_custom_mcp
 # Edit the package name in __init__.py, __main__.py, Dockerfile, etc.
 sed -i 's/ditrasoftware_template_mcp/my_custom_mcp/g' *.py *.yml Dockerfile
 
-# Implement your domain-specific code in providers/
-vim providers/local_tools.py
-vim providers/local_resources.py
-vim providers/local_prompts.py
-vim providers/local_apps.py
+# Implement your domain-specific code in artifacts/
+vim artifacts/tools/local.py
+vim artifacts/resources/local.py
+vim artifacts/prompts/local.py
+vim artifacts/apps/local.py
 ```
 
 ### Integrate with Farmacia MCP
@@ -238,7 +252,7 @@ vim providers/local_apps.py
 If your MCP needs to reference another MCP (e.g., farmacia_mcp), import and use its modules:
 
 ```python
-# In providers/local_tools.py
+# In artifacts/tools/local.py
 from farmacia_mcp.providers.local_tools import register_farmacia_tools
 
 # Register both your tools and farmacia's
@@ -315,7 +329,7 @@ export DITRASOFTWARE_MASK_ERROR_DETAILS=true
 Use tags to control which tools are exposed in different contexts:
 
 ```python
-# In providers/local_tools.py
+# In artifacts/tools/local.py
 
 @mcp.tool(tags={"public", "read-only"})
 def list_items() -> str:

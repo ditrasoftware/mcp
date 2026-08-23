@@ -1,0 +1,47 @@
+[
+  {
+    "name": "type:feature",
+    "color": "0E8A16",
+    "description": "New capability or enhancement"
+  },
+  {
+    "name": "type:fix",
+    "color": "D73A4A",
+    "description": "Bug fix or defect remediation"
+  },
+  {
+    "name": "type:refactor",
+    "color": "5319E7",
+    "description": "Internal restructuring with minimal behavior change"
+  },
+  {
+    "name": "status:proposal",
+    "color": "FBCA04",
+    "description": "Awaiting review and approval"
+  },
+  {
+    "name": "status:approved",
+    "color": "0052CC",
+    "description": "Approved for implementation"
+  },
+  {
+    "name": "status:blocked",
+    "color": "B60205",
+    "description": "Blocked by dependency, risk, or unresolved decision"
+  },
+  {
+    "name": "risk:low",
+    "color": "C2E0C6",
+    "description": "Low delivery or runtime risk"
+  },
+  {
+    "name": "risk:medium",
+    "color": "F9D0C4",
+    "description": "Moderate delivery or runtime risk"
+  },
+  {
+    "name": "risk:high",
+    "color": "E99695",
+    "description": "High delivery or runtime risk"
+  }
+]

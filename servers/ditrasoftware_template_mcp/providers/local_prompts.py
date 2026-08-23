@@ -1,28 +1,8 @@
-from __future__ import annotations
+"""Backward-compatible wrapper for local prompt registration.
 
-from typing import Any
+Use servers.ditrasoftware_template_mcp.artifacts.prompts.local instead.
+"""
 
-from fastmcp import FastMCP
+from ..artifacts.prompts.local import register_local_prompts
 
-
-def register_local_prompts(mcp: FastMCP) -> dict[str, Any]:
-    """Register domain-specific prompts.
-    
-    TODO: Implement your domain-specific prompts here.
-    
-    Prompts are reusable agent templates that can provide context
-    for specific use cases or workflows.
-    """
-    
-    local_prompt_registry: dict[str, Any] = {}
-    
-    # TODO: Add your domain-specific prompts below
-    # Example:
-    # @mcp.prompt()
-    # def my_prompt(context: str) -> str:
-    #     \"\"\"My domain-specific prompt.\"\"\"
-    #     return f"Use this context: {context}"
-    #
-    # local_prompt_registry["my_prompt"] = ...
-    
-    return local_prompt_registry
+__all__ = ["register_local_prompts"]

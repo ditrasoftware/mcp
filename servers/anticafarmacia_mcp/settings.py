@@ -143,7 +143,7 @@ class RBACSettings:
     """Role-based access control configuration (Phase 3)."""
     enabled: bool = False
     enforce_scopes: bool = False  # Require OAuth scopes for tools
-    scope_prefix: str = "ferreromed:"  # e.g., ferreromed:inventory:read
+    scope_prefix: str = "anticafarmacia:"  # e.g., anticafarmacia:inventory:read
     roles_enabled: bool = False  # Use Auth0 groups as roles
     resource_permissions_enabled: bool = False  # Per-resource RBAC
 
@@ -171,7 +171,7 @@ class MFASettings:
     enabled: bool = False
     enforce_mfa: bool = False
     supported_methods: tuple[str, ...] = ("totp", "sms", "email", "webauthn")
-    totp_issuer: str = "FerreroMed MCP"
+    totp_issuer: str = "AnticaFarmacia MCP"
     backup_codes_enabled: bool = True
     grace_period_days: int = 7  # Grace period to enroll MFA
 
@@ -206,7 +206,7 @@ class ComplianceSettings:
 
 
 @dataclass(frozen=True)
-class FerreroMedSettings:
+class AnticaFarmaciaSettings:
     api_base_url: str
     timeout_seconds: float = 30.0
     verify_ssl: bool = True
@@ -235,9 +235,7 @@ class FerreroMedSettings:
     compliance: ComplianceSettings = ComplianceSettings()
 
 
-# Backward-compatible alias while this module is being renamed from template code.
-AnticaFarmaciaSettings = FerreroMedSettings
-DitraSoftwareSettings = FerreroMedSettings
+
 
 
 def _get_bool_env(name: str, default: bool) -> bool:
@@ -265,21 +263,7 @@ def _get_first_set_env(*names: str) -> str | None:
     return None
 
 
-def _get_bool_env_alias(primary: str, fallback: str, default: bool) -> bool:
-    raw = _get_first_set_env(primary, fallback)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-
-def _get_int_env_alias(primary: str, fallback: str, default: int) -> int:
-    raw = (_get_first_set_env(primary, fallback) or "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
 
 
 def _coerce_positive_int(value: int | str | None) -> int | None:
@@ -300,13 +284,7 @@ def _coerce_positive_int(value: int | str | None) -> int | None:
 
 
 def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | None:
-    raw = (
-        _get_first_set_env(
-            "ANTICAFARMACIA_GATEWAY_REMOTES_JSON",
-            "FERREROMED_GATEWAY_REMOTES_JSON",
-        )
-        or ""
-    ).strip()
+    raw = (os.getenv("ANTICAFARMACIA_GATEWAY_REMOTES_JSON") or "").strip()
     if not raw:
         return None
 
@@ -355,13 +333,7 @@ def _parse_remote_backends_from_env() -> tuple[RemoteBackendSettings, ...] | Non
 
 
 def _parse_tool_route_overrides_from_env() -> tuple[tuple[str, str], ...]:
-    raw = (
-        _get_first_set_env(
-            "ANTICAFARMACIA_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON",
-            "FERREROMED_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON",
-        )
-        or ""
-    ).strip()
+    raw = (os.getenv("ANTICAFARMACIA_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON") or "").strip()
     if not raw:
         return ()
 
@@ -386,38 +358,12 @@ def _parse_tool_route_overrides_from_env() -> tuple[tuple[str, str], ...]:
 
 
 def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
-    enabled = _get_bool_env_alias(
-        "ANTICAFARMACIA_GATEWAY_ENABLE_TOOLBOX",
-        "FERREROMED_GATEWAY_ENABLE_TOOLBOX",
-        True,
-    )
-    host = (
-        _get_first_set_env(
-            "ANTICAFARMACIA_GATEWAY_TOOLBOX_HOST",
-            "FERREROMED_GATEWAY_TOOLBOX_HOST",
-        )
-        or "toolbox"
-    ).strip() or "toolbox"
-    port = _get_int_env_alias(
-        "ANTICAFARMACIA_GATEWAY_TOOLBOX_PORT",
-        "FERREROMED_GATEWAY_TOOLBOX_PORT",
-        5000,
-    )
-    init_timeout_ms = _get_int_env_alias(
-        "ANTICAFARMACIA_GATEWAY_TOOLBOX_INIT_TIMEOUT_MS",
-        "FERREROMED_GATEWAY_TOOLBOX_INIT_TIMEOUT_MS",
-        20000,
-    )
-    timeout_ms = _get_int_env_alias(
-        "ANTICAFARMACIA_GATEWAY_TOOLBOX_TIMEOUT_MS",
-        "FERREROMED_GATEWAY_TOOLBOX_TIMEOUT_MS",
-        60000,
-    )
-    server_instructions = _get_bool_env_alias(
-        "ANTICAFARMACIA_GATEWAY_TOOLBOX_SERVER_INSTRUCTIONS",
-        "FERREROMED_GATEWAY_TOOLBOX_SERVER_INSTRUCTIONS",
-        True,
-    )
+    enabled = _get_bool_env("ANTICAFARMACIA_GATEWAY_ENABLE_TOOLBOX", True)
+    host = (os.getenv("ANTICAFARMACIA_GATEWAY_TOOLBOX_HOST") or "toolbox").strip() or "toolbox"
+    port = _get_int_env("ANTICAFARMACIA_GATEWAY_TOOLBOX_PORT", 5000)
+    init_timeout_ms = _get_int_env("ANTICAFARMACIA_GATEWAY_TOOLBOX_INIT_TIMEOUT_MS", 20000)
+    timeout_ms = _get_int_env("ANTICAFARMACIA_GATEWAY_TOOLBOX_TIMEOUT_MS", 60000)
+    server_instructions = _get_bool_env("ANTICAFARMACIA_GATEWAY_TOOLBOX_SERVER_INSTRUCTIONS", True)
 
     remotes: list[RemoteBackendSettings] = [
         RemoteBackendSettings(
@@ -444,42 +390,20 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
         ),
     ]
 
-    google_toolbox_enabled = _get_bool_env_alias(
-        "ANTICAFARMACIA_GATEWAY_ENABLE_GOOGLE_TOOLBOX_MCP",
-        "FERREROMED_GATEWAY_ENABLE_GOOGLE_TOOLBOX_MCP",
-        False,
-    )
+    google_toolbox_enabled = _get_bool_env("ANTICAFARMACIA_GATEWAY_ENABLE_GOOGLE_TOOLBOX_MCP", False)
     google_toolbox_url = (
-        _get_first_set_env(
-            "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_URL",
-            "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_MCP_URL",
-            "GOOGLE_TOOLBOX_MCP_URL",
-        )
+        os.getenv("ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_URL")
+        or os.getenv("GOOGLE_TOOLBOX_MCP_URL")
         or "http://google-toolbox-mcp:8000/mcp"
     ).strip() or "http://google-toolbox-mcp:8000/mcp"
     google_toolbox_auth = (
-        _get_first_set_env(
-            "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_AUTH",
-            "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_MCP_AUTH",
-            "GOOGLE_TOOLBOX_MCP_BEARER_TOKEN",
-        )
+        os.getenv("ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_MCP_AUTH")
+        or os.getenv("GOOGLE_TOOLBOX_MCP_BEARER_TOKEN")
         or ""
     ).strip() or None
-    google_toolbox_init_timeout_ms = _get_int_env_alias(
-        "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_INIT_TIMEOUT_MS",
-        "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_INIT_TIMEOUT_MS",
-        20000,
-    )
-    google_toolbox_timeout_ms = _get_int_env_alias(
-        "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_TIMEOUT_MS",
-        "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_TIMEOUT_MS",
-        60000,
-    )
-    google_toolbox_server_instructions = _get_bool_env_alias(
-        "ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_SERVER_INSTRUCTIONS",
-        "FERREROMED_GATEWAY_GOOGLE_TOOLBOX_SERVER_INSTRUCTIONS",
-        True,
-    )
+    google_toolbox_init_timeout_ms = _get_int_env("ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_INIT_TIMEOUT_MS", 20000)
+    google_toolbox_timeout_ms = _get_int_env("ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_TIMEOUT_MS", 60000)
+    google_toolbox_server_instructions = _get_bool_env("ANTICAFARMACIA_GATEWAY_GOOGLE_TOOLBOX_SERVER_INSTRUCTIONS", True)
 
     remotes.append(
         RemoteBackendSettings(
@@ -499,41 +423,11 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
 
 
 def _build_gateway_settings() -> GatewaySettings:
-    mode = (
-        _get_first_set_env("ANTICAFARMACIA_GATEWAY_MODE", "FERREROMED_GATEWAY_MODE")
-        or "hybrid"
-    ).strip().lower() or "hybrid"
-    route_policy = (
-        (
-            _get_first_set_env(
-                "ANTICAFARMACIA_GATEWAY_ROUTE_POLICY",
-                "FERREROMED_GATEWAY_ROUTE_POLICY",
-            )
-            or "local_preferred"
-        ).strip().lower()
-        or "local_preferred"
-    )
-    mount_on_startup = _get_bool_env_alias(
-        "ANTICAFARMACIA_GATEWAY_MOUNT_ON_STARTUP",
-        "FERREROMED_GATEWAY_MOUNT_ON_STARTUP",
-        True,
-    )
-    allow_direct_calls = _get_bool_env_alias(
-        "ANTICAFARMACIA_GATEWAY_ALLOW_DIRECT_CALLS",
-        "FERREROMED_GATEWAY_ALLOW_DIRECT_CALLS",
-        True,
-    )
-    direct_result_strategy = (
-        (
-            _get_first_set_env(
-                "ANTICAFARMACIA_GATEWAY_DIRECT_RESULT_STRATEGY",
-                "FERREROMED_GATEWAY_DIRECT_RESULT_STRATEGY",
-            )
-            or "passthrough"
-        )
-        .strip()
-        .lower()
-    ) or "passthrough"
+    mode = ((os.getenv("ANTICAFARMACIA_GATEWAY_MODE") or "hybrid").strip().lower()) or "hybrid"
+    route_policy = ((os.getenv("ANTICAFARMACIA_GATEWAY_ROUTE_POLICY") or "local_preferred").strip().lower()) or "local_preferred"
+    mount_on_startup = _get_bool_env("ANTICAFARMACIA_GATEWAY_MOUNT_ON_STARTUP", True)
+    allow_direct_calls = _get_bool_env("ANTICAFARMACIA_GATEWAY_ALLOW_DIRECT_CALLS", True)
+    direct_result_strategy = ((os.getenv("ANTICAFARMACIA_GATEWAY_DIRECT_RESULT_STRATEGY") or "passthrough").strip().lower()) or "passthrough"
     if direct_result_strategy not in {"passthrough", "normalized"}:
         direct_result_strategy = "passthrough"
     tool_route_overrides = _parse_tool_route_overrides_from_env()
@@ -558,19 +452,19 @@ def _build_gateway_settings() -> GatewaySettings:
 
 def _build_oidc_settings() -> OIDCSettings:
     """Build OIDC configuration (Phase 1)."""
-    enabled = _get_bool_env("FERREROMED_AUTH_OIDC_ENABLED", False)
-    mode = (os.getenv("FERREROMED_AUTH_OIDC_MODE") or "oidc_proxy").strip().lower()
-    config_url = (os.getenv("FERREROMED_AUTH_OIDC_CONFIG_URL") or "").strip() or None
-    client_id = (os.getenv("FERREROMED_AUTH_OIDC_CLIENT_ID") or "").strip() or None
-    client_secret = (os.getenv("FERREROMED_AUTH_OIDC_CLIENT_SECRET") or "").strip() or None
-    mcp_base_url = (os.getenv("FERREROMED_AUTH_OIDC_MCP_BASE_URL") or "").strip() or None
+    enabled = _get_bool_env("ANTICAFARMACIA_AUTH_OIDC_ENABLED", False)
+    mode = (os.getenv("ANTICAFARMACIA_AUTH_OIDC_MODE") or "oidc_proxy").strip().lower()
+    config_url = (os.getenv("ANTICAFARMACIA_AUTH_OIDC_CONFIG_URL") or "").strip() or None
+    client_id = (os.getenv("ANTICAFARMACIA_AUTH_OIDC_CLIENT_ID") or "").strip() or None
+    client_secret = (os.getenv("ANTICAFARMACIA_AUTH_OIDC_CLIENT_SECRET") or "").strip() or None
+    mcp_base_url = (os.getenv("ANTICAFARMACIA_AUTH_OIDC_MCP_BASE_URL") or "").strip() or None
     
-    required_scopes_raw = (os.getenv("FERREROMED_AUTH_OIDC_REQUIRED_SCOPES") or "openid profile email").strip()
+    required_scopes_raw = (os.getenv("ANTICAFARMACIA_AUTH_OIDC_REQUIRED_SCOPES") or "openid profile email").strip()
     required_scopes = tuple(s.strip() for s in required_scopes_raw.split(",") if s.strip())
     
-    allow_api_key_fallback = _get_bool_env("FERREROMED_AUTH_OIDC_ALLOW_API_KEY_FALLBACK", True)
-    verify_id_token = _get_bool_env("FERREROMED_AUTH_OIDC_VERIFY_ID_TOKEN", True)
-    token_endpoint_auth_method = (os.getenv("FERREROMED_AUTH_OIDC_TOKEN_ENDPOINT_AUTH_METHOD") or "client_secret_basic").strip().lower()
+    allow_api_key_fallback = _get_bool_env("ANTICAFARMACIA_AUTH_OIDC_ALLOW_API_KEY_FALLBACK", True)
+    verify_id_token = _get_bool_env("ANTICAFARMACIA_AUTH_OIDC_VERIFY_ID_TOKEN", True)
+    token_endpoint_auth_method = (os.getenv("ANTICAFARMACIA_AUTH_OIDC_TOKEN_ENDPOINT_AUTH_METHOD") or "client_secret_basic").strip().lower()
     
     return OIDCSettings(
         enabled=enabled,
@@ -588,18 +482,18 @@ def _build_oidc_settings() -> OIDCSettings:
 
 def _build_audit_settings() -> AuditSettings:
     """Build audit logging configuration (Phase 1)."""
-    enabled = _get_bool_env("FERREROMED_AUDIT_ENABLED", False)
-    destination = (os.getenv("FERREROMED_AUDIT_DESTINATION") or "stdout").strip().lower()
-    cloudwatch_log_group = (os.getenv("FERREROMED_AUDIT_CLOUDWATCH_LOG_GROUP") or "").strip() or None
-    cloudwatch_log_stream = (os.getenv("FERREROMED_AUDIT_CLOUDWATCH_LOG_STREAM") or "").strip() or None
-    elk_endpoint = (os.getenv("FERREROMED_AUDIT_ELK_ENDPOINT") or "").strip() or None
-    splunk_endpoint = (os.getenv("FERREROMED_AUDIT_SPLUNK_ENDPOINT") or "").strip() or None
-    splunk_token = (os.getenv("FERREROMED_AUDIT_SPLUNK_TOKEN") or "").strip() or None
-    log_auth_events = _get_bool_env("FERREROMED_AUDIT_LOG_AUTH_EVENTS", True)
-    log_tool_access = _get_bool_env("FERREROMED_AUDIT_LOG_TOOL_ACCESS", True)
-    log_api_calls = _get_bool_env("FERREROMED_AUDIT_LOG_API_CALLS", False)
-    mask_sensitive_data = _get_bool_env("FERREROMED_AUDIT_MASK_SENSITIVE_DATA", True)
-    retention_days = _get_int_env("FERREROMED_AUDIT_RETENTION_DAYS", 2555)
+    enabled = _get_bool_env("ANTICAFARMACIA_AUDIT_ENABLED", False)
+    destination = (os.getenv("ANTICAFARMACIA_AUDIT_DESTINATION") or "stdout").strip().lower()
+    cloudwatch_log_group = (os.getenv("ANTICAFARMACIA_AUDIT_CLOUDWATCH_LOG_GROUP") or "").strip() or None
+    cloudwatch_log_stream = (os.getenv("ANTICAFARMACIA_AUDIT_CLOUDWATCH_LOG_STREAM") or "").strip() or None
+    elk_endpoint = (os.getenv("ANTICAFARMACIA_AUDIT_ELK_ENDPOINT") or "").strip() or None
+    splunk_endpoint = (os.getenv("ANTICAFARMACIA_AUDIT_SPLUNK_ENDPOINT") or "").strip() or None
+    splunk_token = (os.getenv("ANTICAFARMACIA_AUDIT_SPLUNK_TOKEN") or "").strip() or None
+    log_auth_events = _get_bool_env("ANTICAFARMACIA_AUDIT_LOG_AUTH_EVENTS", True)
+    log_tool_access = _get_bool_env("ANTICAFARMACIA_AUDIT_LOG_TOOL_ACCESS", True)
+    log_api_calls = _get_bool_env("ANTICAFARMACIA_AUDIT_LOG_API_CALLS", False)
+    mask_sensitive_data = _get_bool_env("ANTICAFARMACIA_AUDIT_MASK_SENSITIVE_DATA", True)
+    retention_days = _get_int_env("ANTICAFARMACIA_AUDIT_RETENTION_DAYS", 2555)
     
     return AuditSettings(
         enabled=enabled,
@@ -619,15 +513,15 @@ def _build_audit_settings() -> AuditSettings:
 
 def _build_token_settings() -> TokenSettings:
     """Build token management configuration (Phase 2)."""
-    enabled = _get_bool_env("FERREROMED_AUTH_TOKEN_ENABLED", False)
-    access_token_ttl = _get_int_env("FERREROMED_AUTH_TOKEN_ACCESS_TTL_SECONDS", 3600)
-    refresh_token_ttl = _get_int_env("FERREROMED_AUTH_TOKEN_REFRESH_TTL_SECONDS", 2592000)
-    auto_refresh_buffer = _get_int_env("FERREROMED_AUTH_TOKEN_AUTO_REFRESH_BUFFER_SECONDS", 300)
-    refresh_enabled = _get_bool_env("FERREROMED_AUTH_TOKEN_REFRESH_ENABLED", False)
-    revocation_enabled = _get_bool_env("FERREROMED_AUTH_TOKEN_REVOCATION_ENABLED", False)
-    revocation_check_interval = _get_int_env("FERREROMED_AUTH_TOKEN_REVOCATION_CHECK_INTERVAL_SECONDS", 60)
-    revocation_backend = (os.getenv("FERREROMED_AUTH_TOKEN_REVOCATION_BACKEND") or "memory").strip().lower()
-    redis_url = (os.getenv("FERREROMED_AUTH_TOKEN_REDIS_URL") or "").strip() or None
+    enabled = _get_bool_env("ANTICAFARMACIA_AUTH_TOKEN_ENABLED", False)
+    access_token_ttl = _get_int_env("ANTICAFARMACIA_AUTH_TOKEN_ACCESS_TTL_SECONDS", 3600)
+    refresh_token_ttl = _get_int_env("ANTICAFARMACIA_AUTH_TOKEN_REFRESH_TTL_SECONDS", 2592000)
+    auto_refresh_buffer = _get_int_env("ANTICAFARMACIA_AUTH_TOKEN_AUTO_REFRESH_BUFFER_SECONDS", 300)
+    refresh_enabled = _get_bool_env("ANTICAFARMACIA_AUTH_TOKEN_REFRESH_ENABLED", False)
+    revocation_enabled = _get_bool_env("ANTICAFARMACIA_AUTH_TOKEN_REVOCATION_ENABLED", False)
+    revocation_check_interval = _get_int_env("ANTICAFARMACIA_AUTH_TOKEN_REVOCATION_CHECK_INTERVAL_SECONDS", 60)
+    revocation_backend = (os.getenv("ANTICAFARMACIA_AUTH_TOKEN_REVOCATION_BACKEND") or "memory").strip().lower()
+    redis_url = (os.getenv("ANTICAFARMACIA_AUTH_TOKEN_REDIS_URL") or "").strip() or None
     
     return TokenSettings(
         enabled=enabled,
@@ -644,14 +538,14 @@ def _build_token_settings() -> TokenSettings:
 
 def _build_rate_limit_settings() -> RateLimitSettings:
     """Build rate limiting configuration (Phase 2)."""
-    enabled = _get_bool_env("FERREROMED_RATE_LIMIT_ENABLED", False)
-    per_user = _get_int_env("FERREROMED_RATE_LIMIT_PER_USER", 1000)
-    per_api_key = _get_int_env("FERREROMED_RATE_LIMIT_PER_API_KEY", 10000)
-    per_ip = _get_int_env("FERREROMED_RATE_LIMIT_PER_IP", 5000)
-    per_tenant = _get_int_env("FERREROMED_RATE_LIMIT_PER_TENANT", 50000)
-    token_endpoint_limit = _get_int_env("FERREROMED_RATE_LIMIT_TOKEN_ENDPOINT", 100)
-    auth_endpoint_limit = _get_int_env("FERREROMED_RATE_LIMIT_AUTH_ENDPOINT", 50)
-    storage_backend = (os.getenv("FERREROMED_RATE_LIMIT_STORAGE_BACKEND") or "memory").strip().lower()
+    enabled = _get_bool_env("ANTICAFARMACIA_RATE_LIMIT_ENABLED", False)
+    per_user = _get_int_env("ANTICAFARMACIA_RATE_LIMIT_PER_USER", 1000)
+    per_api_key = _get_int_env("ANTICAFARMACIA_RATE_LIMIT_PER_API_KEY", 10000)
+    per_ip = _get_int_env("ANTICAFARMACIA_RATE_LIMIT_PER_IP", 5000)
+    per_tenant = _get_int_env("ANTICAFARMACIA_RATE_LIMIT_PER_TENANT", 50000)
+    token_endpoint_limit = _get_int_env("ANTICAFARMACIA_RATE_LIMIT_TOKEN_ENDPOINT", 100)
+    auth_endpoint_limit = _get_int_env("ANTICAFARMACIA_RATE_LIMIT_AUTH_ENDPOINT", 50)
+    storage_backend = (os.getenv("ANTICAFARMACIA_RATE_LIMIT_STORAGE_BACKEND") or "memory").strip().lower()
     
     return RateLimitSettings(
         enabled=enabled,
@@ -667,11 +561,11 @@ def _build_rate_limit_settings() -> RateLimitSettings:
 
 def _build_rbac_settings() -> RBACSettings:
     """Build RBAC configuration (Phase 3)."""
-    enabled = _get_bool_env("FERREROMED_RBAC_ENABLED", False)
-    enforce_scopes = _get_bool_env("FERREROMED_RBAC_ENFORCE_SCOPES", False)
-    scope_prefix = (os.getenv("FERREROMED_RBAC_SCOPE_PREFIX") or "ferreromed:").strip()
-    roles_enabled = _get_bool_env("FERREROMED_RBAC_ROLES_ENABLED", False)
-    resource_permissions_enabled = _get_bool_env("FERREROMED_RBAC_RESOURCE_PERMISSIONS_ENABLED", False)
+    enabled = _get_bool_env("ANTICAFARMACIA_RBAC_ENABLED", False)
+    enforce_scopes = _get_bool_env("ANTICAFARMACIA_RBAC_ENFORCE_SCOPES", False)
+    scope_prefix = (os.getenv("ANTICAFARMACIA_RBAC_SCOPE_PREFIX") or "anticafarmacia:").strip()
+    roles_enabled = _get_bool_env("ANTICAFARMACIA_RBAC_ROLES_ENABLED", False)
+    resource_permissions_enabled = _get_bool_env("ANTICAFARMACIA_RBAC_RESOURCE_PERMISSIONS_ENABLED", False)
     
     return RBACSettings(
         enabled=enabled,
@@ -684,11 +578,11 @@ def _build_rbac_settings() -> RBACSettings:
 
 def _build_tenant_settings() -> TenantSettings:
     """Build multi-tenancy configuration (Phase 3)."""
-    enabled = _get_bool_env("FERREROMED_TENANT_ENABLED", False)
-    tenant_isolation_enabled = _get_bool_env("FERREROMED_TENANT_ISOLATION_ENABLED", False)
-    extract_from_token_claim = (os.getenv("FERREROMED_TENANT_EXTRACT_FROM_TOKEN_CLAIM") or "tenant_id").strip()
-    allow_cross_tenant_queries = _get_bool_env("FERREROMED_TENANT_ALLOW_CROSS_TENANT_QUERIES", False)
-    scim_provisioning_enabled = _get_bool_env("FERREROMED_TENANT_SCIM_PROVISIONING_ENABLED", False)
+    enabled = _get_bool_env("ANTICAFARMACIA_TENANT_ENABLED", False)
+    tenant_isolation_enabled = _get_bool_env("ANTICAFARMACIA_TENANT_ISOLATION_ENABLED", False)
+    extract_from_token_claim = (os.getenv("ANTICAFARMACIA_TENANT_EXTRACT_FROM_TOKEN_CLAIM") or "tenant_id").strip()
+    allow_cross_tenant_queries = _get_bool_env("ANTICAFARMACIA_TENANT_ALLOW_CROSS_TENANT_QUERIES", False)
+    scim_provisioning_enabled = _get_bool_env("ANTICAFARMACIA_TENANT_SCIM_PROVISIONING_ENABLED", False)
     
     return TenantSettings(
         enabled=enabled,
@@ -701,13 +595,13 @@ def _build_tenant_settings() -> TenantSettings:
 
 def _build_mfa_settings() -> MFASettings:
     """Build MFA configuration (Phase 4)."""
-    enabled = _get_bool_env("FERREROMED_MFA_ENABLED", False)
-    enforce_mfa = _get_bool_env("FERREROMED_MFA_ENFORCE_MFA", False)
-    supported_methods_raw = (os.getenv("FERREROMED_MFA_SUPPORTED_METHODS") or "totp,sms,email,webauthn").strip()
+    enabled = _get_bool_env("ANTICAFARMACIA_MFA_ENABLED", False)
+    enforce_mfa = _get_bool_env("ANTICAFARMACIA_MFA_ENFORCE_MFA", False)
+    supported_methods_raw = (os.getenv("ANTICAFARMACIA_MFA_SUPPORTED_METHODS") or "totp,sms,email,webauthn").strip()
     supported_methods = tuple(m.strip() for m in supported_methods_raw.split(",") if m.strip())
-    totp_issuer = (os.getenv("FERREROMED_MFA_TOTP_ISSUER") or "FerreroMed MCP").strip()
-    backup_codes_enabled = _get_bool_env("FERREROMED_MFA_BACKUP_CODES_ENABLED", True)
-    grace_period_days = _get_int_env("FERREROMED_MFA_GRACE_PERIOD_DAYS", 7)
+    totp_issuer = (os.getenv("ANTICAFARMACIA_MFA_TOTP_ISSUER") or "AnticaFarmacia MCP").strip()
+    backup_codes_enabled = _get_bool_env("ANTICAFARMACIA_MFA_BACKUP_CODES_ENABLED", True)
+    grace_period_days = _get_int_env("ANTICAFARMACIA_MFA_GRACE_PERIOD_DAYS", 7)
     
     return MFASettings(
         enabled=enabled,
@@ -721,16 +615,16 @@ def _build_mfa_settings() -> MFASettings:
 
 def _build_risk_management_settings() -> RiskManagementSettings:
     """Build risk management configuration (Phase 4)."""
-    enabled = _get_bool_env("FERREROMED_RISK_MANAGEMENT_ENABLED", False)
-    ip_reputation_check = _get_bool_env("FERREROMED_RISK_MANAGEMENT_IP_REPUTATION_CHECK", False)
-    geolocation_check = _get_bool_env("FERREROMED_RISK_MANAGEMENT_GEOLOCATION_CHECK", False)
-    device_fingerprinting = _get_bool_env("FERREROMED_RISK_MANAGEMENT_DEVICE_FINGERPRINTING", False)
-    anomaly_detection = _get_bool_env("FERREROMED_RISK_MANAGEMENT_ANOMALY_DETECTION", False)
-    step_up_auth_on_risk = _get_bool_env("FERREROMED_RISK_MANAGEMENT_STEP_UP_AUTH_ON_RISK", False)
-    require_mfa_on_high_risk = _get_bool_env("FERREROMED_RISK_MANAGEMENT_REQUIRE_MFA_ON_HIGH_RISK", False)
-    max_concurrent_sessions_raw = (os.getenv("FERREROMED_RISK_MANAGEMENT_MAX_CONCURRENT_SESSIONS") or "").strip()
+    enabled = _get_bool_env("ANTICAFARMACIA_RISK_MANAGEMENT_ENABLED", False)
+    ip_reputation_check = _get_bool_env("ANTICAFARMACIA_RISK_MANAGEMENT_IP_REPUTATION_CHECK", False)
+    geolocation_check = _get_bool_env("ANTICAFARMACIA_RISK_MANAGEMENT_GEOLOCATION_CHECK", False)
+    device_fingerprinting = _get_bool_env("ANTICAFARMACIA_RISK_MANAGEMENT_DEVICE_FINGERPRINTING", False)
+    anomaly_detection = _get_bool_env("ANTICAFARMACIA_RISK_MANAGEMENT_ANOMALY_DETECTION", False)
+    step_up_auth_on_risk = _get_bool_env("ANTICAFARMACIA_RISK_MANAGEMENT_STEP_UP_AUTH_ON_RISK", False)
+    require_mfa_on_high_risk = _get_bool_env("ANTICAFARMACIA_RISK_MANAGEMENT_REQUIRE_MFA_ON_HIGH_RISK", False)
+    max_concurrent_sessions_raw = (os.getenv("ANTICAFARMACIA_RISK_MANAGEMENT_MAX_CONCURRENT_SESSIONS") or "").strip()
     max_concurrent_sessions = int(max_concurrent_sessions_raw) if max_concurrent_sessions_raw else None
-    session_timeout_minutes = _get_int_env("FERREROMED_RISK_MANAGEMENT_SESSION_TIMEOUT_MINUTES", 60)
+    session_timeout_minutes = _get_int_env("ANTICAFARMACIA_RISK_MANAGEMENT_SESSION_TIMEOUT_MINUTES", 60)
     
     return RiskManagementSettings(
         enabled=enabled,
@@ -747,17 +641,17 @@ def _build_risk_management_settings() -> RiskManagementSettings:
 
 def _build_compliance_settings() -> ComplianceSettings:
     """Build compliance configuration (Phase 4)."""
-    enabled = _get_bool_env("FERREROMED_COMPLIANCE_ENABLED", False)
-    frameworks_raw = (os.getenv("FERREROMED_COMPLIANCE_FRAMEWORKS") or "").strip()
+    enabled = _get_bool_env("ANTICAFARMACIA_COMPLIANCE_ENABLED", False)
+    frameworks_raw = (os.getenv("ANTICAFARMACIA_COMPLIANCE_FRAMEWORKS") or "").strip()
     frameworks = tuple(f.strip() for f in frameworks_raw.split(",") if f.strip())
-    gdpr_enabled = _get_bool_env("FERREROMED_COMPLIANCE_GDPR_ENABLED", False)
-    gdpr_data_residency = (os.getenv("FERREROMED_COMPLIANCE_GDPR_DATA_RESIDENCY") or "").strip() or None
-    hipaa_enabled = _get_bool_env("FERREROMED_COMPLIANCE_HIPAA_ENABLED", False)
-    hipaa_encryption_enabled = _get_bool_env("FERREROMED_COMPLIANCE_HIPAA_ENCRYPTION_ENABLED", True)
-    pci_dss_enabled = _get_bool_env("FERREROMED_COMPLIANCE_PCI_DSS_ENABLED", False)
-    soc2_enabled = _get_bool_env("FERREROMED_COMPLIANCE_SOC2_ENABLED", False)
-    audit_retention_years = _get_int_env("FERREROMED_COMPLIANCE_AUDIT_RETENTION_YEARS", 7)
-    right_to_be_forgotten_enabled = _get_bool_env("FERREROMED_COMPLIANCE_RIGHT_TO_BE_FORGOTTEN_ENABLED", False)
+    gdpr_enabled = _get_bool_env("ANTICAFARMACIA_COMPLIANCE_GDPR_ENABLED", False)
+    gdpr_data_residency = (os.getenv("ANTICAFARMACIA_COMPLIANCE_GDPR_DATA_RESIDENCY") or "").strip() or None
+    hipaa_enabled = _get_bool_env("ANTICAFARMACIA_COMPLIANCE_HIPAA_ENABLED", False)
+    hipaa_encryption_enabled = _get_bool_env("ANTICAFARMACIA_COMPLIANCE_HIPAA_ENCRYPTION_ENABLED", True)
+    pci_dss_enabled = _get_bool_env("ANTICAFARMACIA_COMPLIANCE_PCI_DSS_ENABLED", False)
+    soc2_enabled = _get_bool_env("ANTICAFARMACIA_COMPLIANCE_SOC2_ENABLED", False)
+    audit_retention_years = _get_int_env("ANTICAFARMACIA_COMPLIANCE_AUDIT_RETENTION_YEARS", 7)
+    right_to_be_forgotten_enabled = _get_bool_env("ANTICAFARMACIA_COMPLIANCE_RIGHT_TO_BE_FORGOTTEN_ENABLED", False)
     
     return ComplianceSettings(
         enabled=enabled,
@@ -774,36 +668,35 @@ def _build_compliance_settings() -> ComplianceSettings:
 
 
 def get_settings() -> AnticaFarmaciaSettings:
-    api_base_url = (os.getenv("FERREROMED_API_BASE_URL") or "").strip().rstrip("/")
+    api_base_url = (os.getenv("ANTICAFARMACIA_API_BASE_URL") or "").strip().rstrip("/")
     # NOTE: We intentionally allow this to be empty so the Prefab UI can still
     # render in environments where the REST backend is not configured.
     # Individual tool/resource calls will raise a clear error if the base URL
     # is missing.
 
-    timeout_seconds_raw = (os.getenv("FERREROMED_API_TIMEOUT_SECONDS") or "30").strip()
+    timeout_seconds_raw = (os.getenv("ANTICAFARMACIA_API_TIMEOUT_SECONDS") or "30").strip()
     try:
         timeout_seconds = float(timeout_seconds_raw)
     except ValueError as e:
         raise RuntimeError(
-            f"Invalid FERREROMED_API_TIMEOUT_SECONDS: {timeout_seconds_raw!r}"
+            f"Invalid ANTICAFARMACIA_API_TIMEOUT_SECONDS: {timeout_seconds_raw!r}"
         ) from e
 
-    verify_ssl = _get_bool_env("FERREROMED_VERIFY_SSL", True)
-
-    default_api_key = (os.getenv("FERREROMED_DEFAULT_API_KEY") or "").strip() or None
+    verify_ssl = _get_bool_env("ANTICAFARMACIA_VERIFY_SSL", True)
+    default_api_key = (os.getenv("ANTICAFARMACIA_DEFAULT_API_KEY") or "").strip() or None
     
     # Response caching configuration (FastMCP 4.0.0+, SEP-2549)
-    cache_ttl = _coerce_positive_int(os.getenv("FERREROMED_CACHE_TTL"))
+    cache_ttl = _coerce_positive_int(os.getenv("ANTICAFARMACIA_CACHE_TTL"))
     cache_scope: str | None = None
     if cache_ttl is not None:
-        scope_raw = (os.getenv("FERREROMED_CACHE_SCOPE") or "private").strip().lower()
+        scope_raw = (os.getenv("ANTICAFARMACIA_CACHE_SCOPE") or "private").strip().lower()
         cache_scope = scope_raw if scope_raw in {"public", "private"} else "private"
     
     # Pagination for large listings
-    list_page_size = _coerce_positive_int(os.getenv("FERREROMED_LIST_PAGE_SIZE"))
+    list_page_size = _coerce_positive_int(os.getenv("ANTICAFARMACIA_LIST_PAGE_SIZE"))
     
     # Error masking for production security
-    mask_error_details = _get_bool_env("FERREROMED_MASK_ERROR_DETAILS", False)
+    mask_error_details = _get_bool_env("ANTICAFARMACIA_MASK_ERROR_DETAILS", False)
     
     # Gateway configuration
     gateway = _build_gateway_settings()

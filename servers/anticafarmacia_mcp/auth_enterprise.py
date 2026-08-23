@@ -18,7 +18,7 @@ from fastmcp.server.context import Context
 from fastmcp.exceptions import ToolError
 
 from .settings import (
-    FerreroMedSettings,
+    AnticaFarmaciaSettings,
     OIDCSettings,
     AuditSettings,
     TokenSettings,
@@ -53,7 +53,7 @@ class AuditEvent:
     tenant_id: str | None = None
 
 
-def audit_log(event: AuditEvent, settings: FerreroMedSettings) -> None:
+def audit_log(event: AuditEvent, settings: AnticaFarmaciaSettings) -> None:
     """Log authentication/authorization event."""
     if not settings.audit.enabled:
         return
@@ -125,7 +125,7 @@ def is_token_expired(token_info: TokenInfo, buffer_seconds: int = 300) -> bool:
     return time.time() > (token_info.expires_at - buffer_seconds)
 
 
-def should_refresh_token(token_info: TokenInfo, settings: FerreroMedSettings) -> bool:
+def should_refresh_token(token_info: TokenInfo, settings: AnticaFarmaciaSettings) -> bool:
     """Determine if token needs refresh."""
     if not settings.token.enabled or not settings.token.refresh_enabled:
         return False
@@ -134,7 +134,7 @@ def should_refresh_token(token_info: TokenInfo, settings: FerreroMedSettings) ->
     return is_token_expired(token_info, settings.token.auto_refresh_buffer_seconds)
 
 
-def is_token_revoked(token: str, settings: FerreroMedSettings) -> bool:
+def is_token_revoked(token: str, settings: AnticaFarmaciaSettings) -> bool:
     """Check if token is in revocation list (Phase 2)."""
     if not settings.token.enabled or not settings.token.revocation_enabled:
         return False
@@ -151,7 +151,7 @@ def is_token_revoked(token: str, settings: FerreroMedSettings) -> bool:
 # PHASE 3: AUTHORIZATION (RBAC + TENANTS)
 # ============================================================================
 
-def has_scope(token_scopes: list[str] | None, required_scope: str, settings: FerreroMedSettings) -> bool:
+def has_scope(token_scopes: list[str] | None, required_scope: str, settings: AnticaFarmaciaSettings) -> bool:
     """Check if token has required scope (Phase 3)."""
     if not settings.rbac.enabled or not settings.rbac.enforce_scopes:
         return True  # RBAC disabled, allow all
@@ -173,7 +173,7 @@ def has_scope(token_scopes: list[str] | None, required_scope: str, settings: Fer
 def check_tenant_isolation(
     token_tenant_id: str | None,
     required_tenant_id: str | None,
-    settings: FerreroMedSettings,
+    settings: AnticaFarmaciaSettings,
 ) -> bool:
     """Validate tenant isolation (Phase 3)."""
     if not settings.tenant.enabled or not settings.tenant.tenant_isolation_enabled:
@@ -196,7 +196,7 @@ def enforce_role_permissions(user_roles: list[str] | None, required_role: str) -
 # PHASE 4: ADVANCED SECURITY (MFA, RISK MANAGEMENT)
 # ============================================================================
 
-def requires_mfa(settings: FerreroMedSettings, risk_score: float | None = None) -> bool:
+def requires_mfa(settings: AnticaFarmaciaSettings, risk_score: float | None = None) -> bool:
     """Determine if MFA is required (Phase 4)."""
     if not settings.mfa.enabled:
         return False
@@ -232,7 +232,7 @@ def extract_token_claims(token: str) -> dict[str, Any] | None:
         return None
 
 
-def extract_user_identity(auth: FerreroMedAuth, settings: FerreroMedSettings) -> dict[str, Any]:
+def extract_user_identity(auth: FerreroMedAuth, settings: AnticaFarmaciaSettings) -> dict[str, Any]:
     """Extract user identity from auth (Phase 1 audit logging)."""
     identity = {
         "user_id": None,
@@ -260,7 +260,7 @@ def extract_user_identity(auth: FerreroMedAuth, settings: FerreroMedSettings) ->
 
 def compute_risk_score(
     ctx: Context | None,
-    settings: FerreroMedSettings,
+    settings: AnticaFarmaciaSettings,
 ) -> float:
     """Compute risk score for step-up auth (Phase 4)."""
     if not settings.risk_management.enabled:
@@ -293,7 +293,7 @@ def compute_risk_score(
 
 def require_auth_enterprise(
     auth: FerreroMedAuth,
-    settings: FerreroMedSettings,
+    settings: AnticaFarmaciaSettings,
     ctx: Context | None = None,
     required_scope: str | None = None,
     required_tenant_id: str | None = None,
@@ -441,7 +441,7 @@ def audit_tool_access(
     tool_name: str,
     success: bool,
     user_id: str | None,
-    settings: FerreroMedSettings,
+    settings: AnticaFarmaciaSettings,
     ctx: Context | None = None,
     error_reason: str | None = None,
 ) -> None:

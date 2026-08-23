@@ -1,0 +1,83 @@
+name: Refactor Proposal
+description: Propose internal restructuring while preserving behavior or APIs
+title: "refactor: "
+labels:
+  - type:refactor
+  - status:proposal
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for maintainability and architecture improvements that should preserve behavior unless explicitly noted.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence refactor summary
+      placeholder: Extract auth and connection strategies from gateway modules
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this refactor needed now?
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_pain
+    attributes:
+      label: Current Pain Points
+      description: What is hard to maintain, test, or extend?
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: API, compatibility, delivery constraints
+      placeholder: No breaking external tool names in first phase
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_structure
+    attributes:
+      label: Proposed Structure
+      description: New modules/interfaces and responsibilities
+    validations:
+      required: true
+
+  - type: textarea
+    id: migration_plan
+    attributes:
+      label: Migration Plan
+      description: Stepwise migration sequence
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and Mitigations
+      description: Technical, operational, and delivery risks
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation Plan
+      description: Test and benchmark expectations
+    validations:
+      required: true
+
+  - type: input
+    id: linked_artifacts
+    attributes:
+      label: Linked Artifacts
+      description: Design docs, ADRs, related issues/PRs

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -10,6 +11,7 @@ from fastmcp import Client
 from ..settings import GatewaySettings, RemoteBackendSettings
 from .remote_auth import (
     GatewayAuthConfigurationError,
+    RemoteOAuthRefreshError,
     is_refresh_flow_configured,
     resolve_remote_auth,
     resolve_remote_auth_force_refresh,
@@ -17,6 +19,13 @@ from .remote_auth import (
 from .resilience import GatewayResilienceManager
 
 logger = logging.getLogger(__name__)
+
+
+def _dynamic_auth_only_enabled() -> bool:
+    raw = os.getenv("ANTICAFARMACIA_GATEWAY_DYNAMIC_AUTH_ONLY")
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _dump_content_block(block: Any) -> dict[str, Any]:
@@ -104,6 +113,8 @@ def _looks_like_auth_failure(exc: Exception) -> bool:
         "unauthorized",
         "forbidden",
         "invalid_token",
+        "invalid_grant",
+        "invalid_client",
         "insufficient_scope",
         "www-authenticate",
         "bearer",
@@ -114,6 +125,19 @@ def _looks_like_auth_failure(exc: Exception) -> bool:
 def _raise_auth_diagnostic(remote: RemoteBackendSettings, *, action: str, exc: Exception) -> None:
     text = str(exc)
     lowered = text.lower()
+    dynamic_auth_only = _dynamic_auth_only_enabled()
+
+    if isinstance(exc, RemoteOAuthRefreshError):
+        if exc.reason in {"invalid_grant", "invalid_client"}:
+            raise RuntimeError(
+                f"Remote auth failed during {action} for {remote.name}: refresh credentials are invalid "
+                f"(reason={exc.reason}). Re-run OAuth bootstrap/consent and retry. Original error: {text}"
+            ) from exc
+        if exc.reason in {"timeout", "network_error", "temporarily_unavailable"}:
+            raise RuntimeError(
+                f"Remote auth failed during {action} for {remote.name}: transient auth backend issue "
+                f"(reason={exc.reason}). Retry shortly. Original error: {text}"
+            ) from exc
 
     if "insufficient_scope" in lowered or "scope" in lowered:
         raise RuntimeError(
@@ -124,6 +148,13 @@ def _raise_auth_diagnostic(remote: RemoteBackendSettings, *, action: str, exc: E
         ) from exc
 
     if _looks_like_auth_failure(exc):
+        if dynamic_auth_only:
+            raise RuntimeError(
+                f"Remote auth failed during {action} for {remote.name}: runtime token rejected or expired. "
+                "Provide fresh x-remote-<remote>-access-token or x-remote-<remote>-refresh-token "
+                "(plus client credentials for refresh flow) and ensure issuer/audience trust policy matches. "
+                f"Original error: {text}"
+            ) from exc
         raise RuntimeError(
             f"Remote auth failed during {action} for {remote.name}: token rejected or expired. "
             "Check GOOGLE_WORKSPACE_MCP_BEARER_TOKEN or refresh-token settings, then refresh token. "
@@ -166,7 +197,10 @@ async def _execute_remote_operation(
         can_retry = _looks_like_auth_failure(exc) and is_refresh_flow_configured(remote)
         if can_retry:
             try:
-                refreshed_auth = await resolve_remote_auth_force_refresh(remote)
+                refreshed_auth = await resolve_remote_auth_force_refresh(
+                    remote,
+                    ignore_explicit_auth=True,
+                )
                 return await _call_with_client(remote, auth=refreshed_auth, operation=operation)
             except Exception as retry_exc:
                 _raise_auth_diagnostic(remote, action=action, exc=retry_exc)

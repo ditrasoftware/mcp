@@ -1,0 +1,91 @@
+name: Bug Fix Proposal
+description: Propose a fix with root cause analysis, blast radius, and verification
+title: "fix: "
+labels:
+  - type:fix
+  - status:proposal
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for production bugs, reliability defects, and security-sensitive fixes.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence fix summary
+      placeholder: Normalize env namespace resolution in AnticaFarmacia settings
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed_behavior
+    attributes:
+      label: Observed Behavior
+      description: What is failing now?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected Behavior
+      description: What should happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: root_cause
+    attributes:
+      label: Suspected Root Cause
+      description: Include file/module hints if known
+      placeholder: Mixed FERREROMED and ANTICAFARMACIA env key usage in settings parser
+    validations:
+      required: true
+
+  - type: textarea
+    id: blast_radius
+    attributes:
+      label: Blast Radius
+      description: Which users, environments, and flows are impacted?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_fix
+    attributes:
+      label: Proposed Fix
+      description: Concrete implementation approach
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and Mitigations
+      description: Regression risk and safeguards
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation Plan
+      description: Test plan and monitoring checks
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback Plan
+      description: How to revert safely if fix degrades behavior
+    validations:
+      required: true
+
+  - type: input
+    id: linked_artifacts
+    attributes:
+      label: Linked Artifacts
+      description: Design docs, ADRs, incident links, related issues/PRs

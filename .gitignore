@@ -17,6 +17,7 @@ venv/
 # Secrets and local config
 .env
 .env.*
+.env_*
 !.env.example
 *.pem
 *.key
@@ -25,3 +26,7 @@ venv/
 *.jks
 id_rsa
 id_ed25519
+
+# Local backups / snapshots
+*.bak/
+servers/*.bak/

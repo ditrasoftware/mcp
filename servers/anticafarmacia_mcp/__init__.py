@@ -1,13 +1,11 @@
-"""AnticaFarmacia MCP Template (FastMCP 4.x).
+"""AnticaFarmacia MCP (FastMCP 4.x, refactored architecture).
 
-This package provides a base scaffolding for AnticaFarmacia MCP servers.
-It includes generic infrastructure for REST API integration, gateway capabilities,
-and UI console.
-
-Domain-specific implementation (tools, resources, prompts) should be added by
-extending the local_tools, local_resources, and local_prompts modules.
-
-Implementation lives in `server.py` and the `providers/` directory.
+This package follows the refactored artifact architecture:
+- Canonical artifact registrations in `artifacts/`
+- Compatibility wrappers and adapters in `providers/`
+- Cross-cutting middleware in `middleware/`
+- Capability contracts and taxonomy in `capability/`
 """
 
 from .server import create_mcp  # noqa: F401
+from .version import __version__  # noqa: F401
