@@ -1,0 +1,78 @@
+services:
+  playwright_native:
+    image: mcr.microsoft.com/playwright/mcp:v0.0.79
+    container_name: playwright-native
+    command: ["--port", "8931", "--host", "0.0.0.0", "--headless", "--no-sandbox", "--allowed-hosts", "*", "--allowed-origins", "*"]
+    restart: always
+    networks:
+      - default
+
+  playwright_mcp:
+    image: ${PLAYWRIGHT_MCP_IMAGE:-gcr.io/oxytrack-322814/ditra-playwright-mcp:1.0.11}
+    pull_policy: always
+    container_name: playwright-mcp
+    environment:
+      PLAYWRIGHT_MCP_GCS_BUCKET: ${PLAYWRIGHT_MCP_GCS_BUCKET:-}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-oxytrack-322814}
+      PLAYWRIGHT_MCP_GCP_SERVICE_ACCOUNT: ${PLAYWRIGHT_MCP_GCP_SERVICE_ACCOUNT:-}
+      PLAYWRIGHT_MCP_ARTIFACT_PREFIX: ${PLAYWRIGHT_MCP_ARTIFACT_PREFIX:-playwright}
+      PLAYWRIGHT_MCP_SIGNED_URL_TTL_SECONDS: ${PLAYWRIGHT_MCP_SIGNED_URL_TTL_SECONDS:-900}
+      PLAYWRIGHT_MCP_MAX_SIGNED_URL_TTL_SECONDS: ${PLAYWRIGHT_MCP_MAX_SIGNED_URL_TTL_SECONDS:-3600}
+      PLAYWRIGHT_MCP_NAVIGATION_TIMEOUT_MS: ${PLAYWRIGHT_MCP_NAVIGATION_TIMEOUT_MS:-60000}
+      PLAYWRIGHT_MCP_MAX_NAVIGATION_TIMEOUT_MS: ${PLAYWRIGHT_MCP_MAX_NAVIGATION_TIMEOUT_MS:-120000}
+      PLAYWRIGHT_MCP_NAVIGATION_WAIT_UNTIL: ${PLAYWRIGHT_MCP_NAVIGATION_WAIT_UNTIL:-load}
+      PLAYWRIGHT_MCP_BLOCK_THIRD_PARTY_REQUESTS: ${PLAYWRIGHT_MCP_BLOCK_THIRD_PARTY_REQUESTS:-true}
+      PLAYWRIGHT_MCP_MAX_ARTIFACT_BYTES: ${PLAYWRIGHT_MCP_MAX_ARTIFACT_BYTES:-26214400}
+      PLAYWRIGHT_MCP_TENANT_TOKEN_SECRET: ${PLAYWRIGHT_MCP_TENANT_TOKEN_SECRET:-}
+      PLAYWRIGHT_MCP_NATIVE_URL: ${PLAYWRIGHT_MCP_NATIVE_URL:-http://playwright_native:8931/mcp}
+      PLAYWRIGHT_MCP_NATIVE_NAMESPACE: ${PLAYWRIGHT_MCP_NATIVE_NAMESPACE:-playwright}
+      PLAYWRIGHT_MCP_AUTH_MODE: ${PLAYWRIGHT_MCP_AUTH_MODE:-gcip_password}
+      PLAYWRIGHT_MCP_BASE_URL: ${PLAYWRIGHT_MCP_BASE_URL:-https://mcp.playwright.ditra.app}
+      PLAYWRIGHT_MCP_RESOURCE_BASE_URL: ${PLAYWRIGHT_MCP_RESOURCE_BASE_URL:-https://mcp.playwright.ditra.app}
+      PLAYWRIGHT_MCP_OIDC_CONFIG_URL: ${PLAYWRIGHT_MCP_OIDC_CONFIG_URL:-}
+      PLAYWRIGHT_MCP_OIDC_CLIENT_ID: ${PLAYWRIGHT_MCP_OIDC_CLIENT_ID:-}
+      PLAYWRIGHT_MCP_OIDC_CLIENT_SECRET: ${PLAYWRIGHT_MCP_OIDC_CLIENT_SECRET:-}
+      PLAYWRIGHT_MCP_OIDC_JWT_SIGNING_KEY: ${PLAYWRIGHT_MCP_OIDC_JWT_SIGNING_KEY:-}
+      PLAYWRIGHT_MCP_OIDC_REQUIRED_SCOPES: ${PLAYWRIGHT_MCP_OIDC_REQUIRED_SCOPES:-openid profile email}
+      PLAYWRIGHT_MCP_OIDC_ALLOWED_CLIENT_REDIRECT_URIS: ${PLAYWRIGHT_MCP_OIDC_ALLOWED_CLIENT_REDIRECT_URIS:-}
+      PLAYWRIGHT_MCP_GCIP_WEB_API_KEY: ${PLAYWRIGHT_MCP_GCIP_WEB_API_KEY:-}
+      PLAYWRIGHT_MCP_GCIP_PROJECT_ID: ${PLAYWRIGHT_MCP_GCIP_PROJECT_ID:-}
+      PLAYWRIGHT_MCP_GCIP_TENANT_ID: ${PLAYWRIGHT_MCP_GCIP_TENANT_ID:-}
+      PLAYWRIGHT_MCP_APPLICATION_TENANT_ID: ${PLAYWRIGHT_MCP_APPLICATION_TENANT_ID:-}
+      PLAYWRIGHT_MCP_OAUTH_SIGNING_SECRET: ${PLAYWRIGHT_MCP_OAUTH_SIGNING_SECRET:-}
+      PLAYWRIGHT_MCP_OAUTH_REQUIRED_SCOPES: ${PLAYWRIGHT_MCP_OAUTH_REQUIRED_SCOPES:-playwright}
+      PLAYWRIGHT_MCP_OAUTH_ALLOWED_REDIRECT_URIS: ${PLAYWRIGHT_MCP_OAUTH_ALLOWED_REDIRECT_URIS:-https://chatgpt.com/connector/oauth/* https://claude.ai/api/mcp/auth_callback https://ditrachat.ditra.app/api/mcp/*/oauth/callback}
+      PLAYWRIGHT_MCP_OAUTH_CLIENT_REGISTRATION_STORE_PATH: ${PLAYWRIGHT_MCP_OAUTH_CLIENT_REGISTRATION_STORE_PATH:-/var/lib/playwright-mcp/oauth-clients.json}
+      PLAYWRIGHT_MCP_VERIFY_TENANT_TOKENS: ${PLAYWRIGHT_MCP_VERIFY_TENANT_TOKENS:-true}
+      PLAYWRIGHT_MCP_ALLOW_UNAUTHENTICATED_LOCAL: ${PLAYWRIGHT_MCP_ALLOW_UNAUTHENTICATED_LOCAL:-false}
+      PLAYWRIGHT_MCP_ALLOW_PRIVATE_NETWORKS: ${PLAYWRIGHT_MCP_ALLOW_PRIVATE_NETWORKS:-false}
+      FASTMCP_HOST: ${FASTMCP_HOST:-0.0.0.0}
+      FASTMCP_PORT: ${FASTMCP_PORT:-8001}
+      FASTMCP_STREAMABLE_HTTP_PATH: ${FASTMCP_STREAMABLE_HTTP_PATH:-/mcp}
+      FASTMCP_STATELESS_HTTP: ${FASTMCP_STATELESS_HTTP:-true}
+    ports:
+      - "${PLAYWRIGHT_MCP_HOST_PORT:-8096}:${FASTMCP_PORT:-8001}"
+    volumes:
+      - playwright_mcp_artifacts:/tmp/playwright-mcp-artifacts
+      - playwright_mcp_oauth:/var/lib/playwright-mcp
+    restart: always
+    depends_on:
+      - playwright_native
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - default
+      - ditra-shared
+
+networks:
+  ditra-shared:
+    external: true
+    name: ${PLAYWRIGHT_MCP_SHARED_NETWORK:-ditra-shared}
+
+volumes:
+  playwright_mcp_artifacts:
+  playwright_mcp_oauth:
