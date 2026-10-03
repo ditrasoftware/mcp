@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -25,8 +25,35 @@ class GatewaySettings:
     mount_on_startup: bool = True
     allow_direct_calls: bool = True
     direct_result_strategy: str = "passthrough"
+    advertise_mcp_apps_ui: bool = True
     tool_route_overrides: tuple[tuple[str, str], ...] = ()
     remotes: tuple[RemoteBackendSettings, ...] = ()
+
+
+@dataclass(frozen=True)
+class MetabaseSettings:
+    """Connection settings for the Ditra Analytics instance (Metabase Pro)."""
+
+    site_url: str = "https://analytics.ditra.io"
+    mcp_url: str = "https://analytics.ditra.io/api/metabase-mcp"
+    access_mode: str = "mcp_first"
+    api_fallback_enabled: bool = True
+    api_key: str | None = None
+    username: str | None = None
+    password: str | None = None
+    timeout_seconds: float = 30.0
+    verify_ssl: bool = True
+    default_page_size: int = 100
+    max_page_size: int = 500
+    # Defaults matching the Lottomatica PSS procurement portal.
+    default_dashboard_id: int = 30
+    default_collection_id: int = 6
+    # Canonical KPI source (ODA detail model) and optional date-field override.
+    kpi_source_card_id: int = 685
+    kpi_date_field: str | None = None
+    # Static-embedding secret used to sign saved-card embed URLs; never sent to clients.
+    embedding_secret_key: str | None = field(default=None, repr=False)
+    embed_token_ttl_seconds: int = 600
 
 
 # PHASE 1: Foundation (OIDC + Audit Logging)
@@ -163,6 +190,7 @@ class LottomaticapssSettings:
     list_page_size: int | None = None
     mask_error_details: bool = False
     gateway: GatewaySettings = GatewaySettings()
+    metabase: MetabaseSettings = MetabaseSettings()
     # Phase 1: Foundation
     oidc: OIDCSettings = OIDCSettings()
     audit: AuditSettings = AuditSettings()
@@ -320,6 +348,36 @@ def _default_toolbox_remotes() -> tuple[RemoteBackendSettings, ...]:
     )
 
 
+def _configured_ditra_analytics_remote() -> tuple[RemoteBackendSettings, ...]:
+    url = (
+        os.getenv("LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_URL")
+        or os.getenv("METABASE_MCP_URL")
+        or ""
+    ).strip()
+    if not url:
+        return ()
+
+    return (
+        RemoteBackendSettings(
+            name="ditra-analytics",
+            namespace="ditra_analytics",
+            type="streamable-http",
+            url=url,
+            auth="__auto__",
+            init_timeout_ms=_get_int_env(
+                "LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_INIT_TIMEOUT_MS", 20000
+            ),
+            timeout_ms=_get_int_env(
+                "LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_TIMEOUT_MS", 60000
+            ),
+            server_instructions=_get_bool_env(
+                "LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_SERVER_INSTRUCTIONS", True
+            ),
+            enabled=_get_bool_env("LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_ENABLED", True),
+        ),
+    )
+
+
 def _build_gateway_settings() -> GatewaySettings:
     mode = (os.getenv("LOTTOMATICAPSS_GATEWAY_MODE") or "hybrid").strip().lower() or "hybrid"
     route_policy = (
@@ -335,9 +393,16 @@ def _build_gateway_settings() -> GatewaySettings:
     ) or "passthrough"
     if direct_result_strategy not in {"passthrough", "normalized"}:
         direct_result_strategy = "passthrough"
+    advertise_mcp_apps_ui = _get_bool_env(
+        "LOTTOMATICAPSS_GATEWAY_ADVERTISE_MCP_APPS_UI", True
+    )
     tool_route_overrides = _parse_tool_route_overrides_from_env()
 
-    remotes = _parse_remote_backends_from_env() or _default_toolbox_remotes()
+    remotes = (
+        _parse_remote_backends_from_env()
+        or _configured_ditra_analytics_remote()
+        or _default_toolbox_remotes()
+    )
 
     # Keep only enabled remotes; explicit per-remote disabling is supported.
     filtered = tuple(r for r in remotes if r.enabled)
@@ -348,8 +413,72 @@ def _build_gateway_settings() -> GatewaySettings:
         mount_on_startup=mount_on_startup,
         allow_direct_calls=allow_direct_calls,
         direct_result_strategy=direct_result_strategy,
+            advertise_mcp_apps_ui=advertise_mcp_apps_ui,
         tool_route_overrides=tool_route_overrides,
         remotes=filtered,
+    )
+
+
+def _build_metabase_settings() -> MetabaseSettings:
+    """Build Ditra Analytics (Metabase Pro) connection settings."""
+    site_url = (os.getenv("METABASE_SITE_URL") or "https://analytics.ditra.io").strip().rstrip("/")
+    mcp_url = (
+        os.getenv("METABASE_MCP_URL") or f"{site_url}/api/metabase-mcp"
+    ).strip().rstrip("/")
+    access_mode = (os.getenv("METABASE_ACCESS_MODE") or "mcp_first").strip().lower()
+    if access_mode not in {"mcp_first", "api_only"}:
+        raise RuntimeError(
+            "Invalid METABASE_ACCESS_MODE: expected 'mcp_first' or 'api_only'"
+        )
+    api_fallback_enabled = _get_bool_env("METABASE_API_FALLBACK_ENABLED", True)
+    api_key = (os.getenv("METABASE_API_KEY") or "").strip() or None
+    username = (os.getenv("METABASE_USERNAME") or "").strip() or None
+    password = os.getenv("METABASE_PASSWORD") or None
+    if password is not None:
+        password = password.strip() or None
+
+    timeout_raw = (os.getenv("METABASE_TIMEOUT_SECONDS") or "30").strip()
+    try:
+        timeout_seconds = float(timeout_raw)
+    except ValueError as e:
+        raise RuntimeError(f"Invalid METABASE_TIMEOUT_SECONDS: {timeout_raw!r}") from e
+
+    verify_ssl = _get_bool_env("METABASE_VERIFY_SSL", True)
+    default_page_size = _get_int_env("METABASE_DEFAULT_PAGE_SIZE", 100)
+    max_page_size = _get_int_env("METABASE_MAX_PAGE_SIZE", 500)
+    if default_page_size <= 0 or max_page_size <= 0 or default_page_size > max_page_size:
+        raise RuntimeError(
+            "METABASE_DEFAULT_PAGE_SIZE and METABASE_MAX_PAGE_SIZE must be positive, "
+            "and the default cannot exceed the maximum"
+        )
+
+    default_dashboard_id = _get_int_env("METABASE_DEFAULT_DASHBOARD_ID", 30)
+    default_collection_id = _get_int_env("METABASE_DEFAULT_COLLECTION_ID", 6)
+    kpi_source_card_id = _get_int_env("LOTTOMATICAPSS_KPI_SOURCE_CARD_ID", 685)
+    kpi_date_field = (os.getenv("LOTTOMATICAPSS_KPI_DATE_FIELD") or "").strip() or None
+    embedding_secret_key = (os.getenv("METABASE_EMBEDDING_SECRET_KEY") or "").strip() or None
+    embed_token_ttl_seconds = _get_int_env("METABASE_EMBED_TOKEN_TTL_SECONDS", 600)
+    if embed_token_ttl_seconds <= 0:
+        raise RuntimeError("METABASE_EMBED_TOKEN_TTL_SECONDS must be positive")
+
+    return MetabaseSettings(
+        site_url=site_url,
+        mcp_url=mcp_url,
+        access_mode=access_mode,
+        api_fallback_enabled=api_fallback_enabled,
+        api_key=api_key,
+        username=username,
+        password=password,
+        timeout_seconds=timeout_seconds,
+        verify_ssl=verify_ssl,
+        default_page_size=default_page_size,
+        max_page_size=max_page_size,
+        default_dashboard_id=default_dashboard_id,
+        default_collection_id=default_collection_id,
+        kpi_source_card_id=kpi_source_card_id,
+        kpi_date_field=kpi_date_field,
+        embedding_secret_key=embedding_secret_key,
+        embed_token_ttl_seconds=embed_token_ttl_seconds,
     )
 
 
@@ -363,7 +492,7 @@ def _build_oidc_settings() -> OIDCSettings:
     client_id = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_CLIENT_ID") or "").strip() or None
     client_secret = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_CLIENT_SECRET") or "").strip() or None
     mcp_base_url = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_MCP_BASE_URL") or "").strip() or None
-    
+
     required_scopes_raw = (os.getenv("LOTTOMATICAPSS_AUTH_OIDC_REQUIRED_SCOPES") or "openid profile email").strip()
     required_scopes = tuple(s.strip() for s in required_scopes_raw.split(",") if s.strip())
     
@@ -603,10 +732,13 @@ def get_settings() -> LottomaticapssSettings:
     
     # Error masking for production security
     mask_error_details = _get_bool_env("LOTTOMATICAPSS_MASK_ERROR_DETAILS", False)
-    
+
     # Gateway configuration
     gateway = _build_gateway_settings()
-    
+
+    # Ditra Analytics (Metabase Pro) connection
+    metabase = _build_metabase_settings()
+
     # Enterprise Authentication (Phase 1-4, all disabled by default)
     oidc = _build_oidc_settings()
     audit = _build_audit_settings()
@@ -628,6 +760,7 @@ def get_settings() -> LottomaticapssSettings:
         list_page_size=list_page_size,
         mask_error_details=mask_error_details,
         gateway=gateway,
+        metabase=metabase,
         oidc=oidc,
         audit=audit,
         token=token,

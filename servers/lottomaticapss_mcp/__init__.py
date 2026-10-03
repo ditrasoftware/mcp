@@ -11,3 +11,4 @@ Implementation lives in `server.py` and the `providers/` directory.
 """
 
 from .server import create_mcp  # noqa: F401
+from .version import __version__  # noqa: F401

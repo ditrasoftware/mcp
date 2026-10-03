@@ -50,6 +50,10 @@
       "description": "Remote MCP backends JSON (array of {name, namespace, type, url, ...})",
       "required": false
     },
+    "LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_URL": {
+      "description": "Canonical Ditra Analytics MCP streamable HTTP URL; overrides METABASE_MCP_URL when REMOTES_JSON is unset",
+      "required": false
+    },
     "LOTTOMATICAPSS_GATEWAY_TOOL_ROUTE_OVERRIDES_JSON": {
       "description": "Tool routing overrides JSON (object of tool_name -> 'local'|'remote')",
       "required": false

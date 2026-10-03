@@ -1,15 +1,27 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+from contextlib import contextmanager, nullcontext
+import json
 import os
 import re
+import tempfile
+import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
+import httpx2
 
 from ..settings import RemoteBackendSettings
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - supported deployment targets are POSIX
+    fcntl = None
 
 
 @dataclass
@@ -20,6 +32,10 @@ class _TokenCacheEntry:
 
 _TOKEN_CACHE: dict[str, _TokenCacheEntry] = {}
 _AUTO_AUTH_SENTINEL = "__auto__"
+_RUNTIME_REMOTE_SECRETS: dict[str, dict[str, str]] | None = None
+_REFRESH_LOCKS: dict[str, threading.Lock] = {}
+_ASYNC_REFRESH_LOCKS: dict[str, asyncio.Lock] = {}
+_REFRESH_LOCKS_GUARD = threading.Lock()
 
 
 class GatewayAuthConfigurationError(RuntimeError):
@@ -37,6 +53,117 @@ def _sanitize_id(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9]", "_", value or "")
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     return cleaned.upper()
+
+
+def _runtime_remote_id(remote: RemoteBackendSettings) -> str:
+    return f"{_sanitize_id(remote.name)}__{_sanitize_id(remote.namespace)}"
+
+
+def _runtime_store_path() -> Path | None:
+    raw = _clean(os.getenv("LOTTOMATICAPSS_GATEWAY_REMOTE_AUTH_STORE_PATH"))
+    return Path(raw) if raw else None
+
+
+@contextmanager
+def _refresh_file_lock(remote: RemoteBackendSettings):
+    store_path = _runtime_store_path()
+    if store_path is None or fcntl is None:
+        with nullcontext():
+            yield
+        return
+
+    lock_path = store_path.with_name(f"{store_path.name}.{_sanitize_id(remote.name)}.lock")
+    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _load_runtime_remote_secrets() -> dict[str, dict[str, str]]:
+    global _RUNTIME_REMOTE_SECRETS
+    if _RUNTIME_REMOTE_SECRETS is not None:
+        return _RUNTIME_REMOTE_SECRETS
+    _RUNTIME_REMOTE_SECRETS = {}
+    path = _runtime_store_path()
+    if path is None or not path.exists():
+        return _RUNTIME_REMOTE_SECRETS
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return _RUNTIME_REMOTE_SECRETS
+    if not isinstance(data, dict):
+        return _RUNTIME_REMOTE_SECRETS
+    for remote_id, values in data.items():
+        if isinstance(remote_id, str) and isinstance(values, dict):
+            _RUNTIME_REMOTE_SECRETS[remote_id] = {
+                str(key): str(value).strip()
+                for key, value in values.items()
+                if isinstance(value, str) and value.strip()
+            }
+    return _RUNTIME_REMOTE_SECRETS
+
+
+def _reload_runtime_remote_secrets() -> None:
+    global _RUNTIME_REMOTE_SECRETS
+    _RUNTIME_REMOTE_SECRETS = None
+    _load_runtime_remote_secrets()
+
+
+def _write_runtime_remote_secrets() -> None:
+    path = _runtime_store_path()
+    if path is None:
+        return
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump(_load_runtime_remote_secrets(), output)
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
+def _persist_rotated_refresh_token(remote: RemoteBackendSettings, payload: Any) -> None:
+    if not isinstance(payload, dict):
+        return
+    refresh_token = _clean(str(payload.get("refresh_token") or ""))
+    if not refresh_token:
+        return
+    stored = _load_runtime_remote_secrets()
+    credentials = stored.setdefault(_runtime_remote_id(remote), {})
+    if credentials.get("REFRESH_TOKEN") == refresh_token:
+        return
+    credentials["REFRESH_TOKEN"] = refresh_token
+    _write_runtime_remote_secrets()
+
+
+def set_runtime_remote_credentials(
+    remote: RemoteBackendSettings,
+    credentials: dict[str, str],
+) -> None:
+    """Persist gateway-managed credentials without placing them in deployment env."""
+    stored = _load_runtime_remote_secrets()
+    stored[_runtime_remote_id(remote)] = {
+        key: value.strip() for key, value in credentials.items() if value.strip()
+    }
+    clear_remote_auth_cache(remote)
+    _write_runtime_remote_secrets()
+
+
+def get_runtime_remote_auth_status(remote: RemoteBackendSettings) -> dict[str, bool]:
+    values = _load_runtime_remote_secrets().get(_runtime_remote_id(remote), {})
+    return {
+        "configured": bool(values),
+        "has_refresh_token": bool(values.get("REFRESH_TOKEN")),
+        "has_access_token": bool(values.get("ACCESS_TOKEN")),
+        "has_client_id": bool(values.get("CLIENT_ID")),
+        "has_client_secret": bool(values.get("CLIENT_SECRET")),
+    }
 
 
 def _first_set_env(names: list[str]) -> str | None:
@@ -81,7 +208,8 @@ def _candidate_env_names(remote: RemoteBackendSettings, key: str) -> list[str]:
 
 
 def _get_remote_env(remote: RemoteBackendSettings, key: str) -> str | None:
-    return _first_set_env(_candidate_env_names(remote, key))
+    runtime_value = _load_runtime_remote_secrets().get(_runtime_remote_id(remote), {}).get(key)
+    return _clean(runtime_value) or _first_set_env(_candidate_env_names(remote, key))
 
 
 def _is_google_workspace_remote(remote: RemoteBackendSettings) -> bool:
@@ -104,17 +232,29 @@ def _cache_key(
     remote: RemoteBackendSettings,
     token_endpoint: str,
     client_id: str | None,
-    refresh_token: str | None,
     scope: str | None,
     method: str,
 ) -> str:
-    rt_fingerprint = ""
-    if refresh_token:
-        rt_fingerprint = refresh_token[-12:]
     return (
         f"{remote.name}|{remote.namespace}|{token_endpoint}|{client_id or ''}|"
-        f"{method}|{scope or ''}|{rt_fingerprint}"
+        f"{method}|{scope or ''}"
     )
+
+
+def _refresh_lock_key(remote: RemoteBackendSettings) -> str:
+    return f"{remote.name}|{remote.namespace}"
+
+
+def _get_refresh_lock(remote: RemoteBackendSettings) -> threading.Lock:
+    key = _refresh_lock_key(remote)
+    with _REFRESH_LOCKS_GUARD:
+        return _REFRESH_LOCKS.setdefault(key, threading.Lock())
+
+
+def _get_async_refresh_lock(remote: RemoteBackendSettings) -> asyncio.Lock:
+    key = _refresh_lock_key(remote)
+    with _REFRESH_LOCKS_GUARD:
+        return _ASYNC_REFRESH_LOCKS.setdefault(key, asyncio.Lock())
 
 
 def _get_cached_token(key: str) -> str | None:
@@ -151,6 +291,8 @@ def _build_refresh_request(remote: RemoteBackendSettings) -> tuple[str, str, dic
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
     }
+    if remote.name == "ditra-analytics":
+        form["resource"] = remote.url
     headers: dict[str, str] = {
         "content-type": "application/x-www-form-urlencoded",
     }
@@ -180,7 +322,6 @@ def _build_refresh_request(remote: RemoteBackendSettings) -> tuple[str, str, dic
         remote,
         token_endpoint=token_endpoint,
         client_id=client_id,
-        refresh_token=refresh_token,
         scope=scope,
         method=method,
     )
@@ -264,6 +405,70 @@ def clear_remote_auth_cache(remote: RemoteBackendSettings) -> None:
         _TOKEN_CACHE.pop(key, None)
 
 
+def _refresh_remote_auth_sync(remote: RemoteBackendSettings, *, force_refresh: bool) -> str | None:
+    with _get_refresh_lock(remote):
+        with _refresh_file_lock(remote):
+            _reload_runtime_remote_secrets()
+            request_parts = _build_refresh_request(remote)
+            if request_parts is None:
+                return None
+
+            cache_key, token_endpoint, headers, form = request_parts
+            if force_refresh:
+                _TOKEN_CACHE.pop(cache_key, None)
+            cached = _get_cached_token(cache_key)
+            if cached and not force_refresh:
+                return cached
+
+            timeout = httpx.Timeout(20.0)
+            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                resp = client.post(token_endpoint, data=form, headers=headers)
+            if resp.status_code >= 400:
+                body = (resp.text or "").strip()
+                detail = body[:300] if body else f"HTTP {resp.status_code}"
+                raise RuntimeError(f"Remote OAuth token refresh failed: {detail}")
+
+            payload = resp.json()
+            token, expires_in = _extract_token_payload(payload)
+            if not token:
+                raise RuntimeError("Remote OAuth token refresh did not return access_token")
+            _persist_rotated_refresh_token(remote, payload)
+            _put_cached_token(cache_key, token, expires_in)
+            return token
+
+
+async def _refresh_remote_auth(remote: RemoteBackendSettings, *, force_refresh: bool) -> str | None:
+    async with _get_async_refresh_lock(remote):
+        with _refresh_file_lock(remote):
+            _reload_runtime_remote_secrets()
+            request_parts = _build_refresh_request(remote)
+            if request_parts is None:
+                return None
+
+            cache_key, token_endpoint, headers, form = request_parts
+            if force_refresh:
+                _TOKEN_CACHE.pop(cache_key, None)
+            cached = _get_cached_token(cache_key)
+            if cached and not force_refresh:
+                return cached
+
+            timeout = httpx.Timeout(20.0)
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                resp = await client.post(token_endpoint, data=form, headers=headers)
+            if resp.status_code >= 400:
+                body = (resp.text or "").strip()
+                detail = body[:300] if body else f"HTTP {resp.status_code}"
+                raise RuntimeError(f"Remote OAuth token refresh failed: {detail}")
+
+            payload = resp.json()
+            token, expires_in = _extract_token_payload(payload)
+            if not token:
+                raise RuntimeError("Remote OAuth token refresh did not return access_token")
+            _persist_rotated_refresh_token(remote, payload)
+            _put_cached_token(cache_key, token, expires_in)
+            return token
+
+
 def resolve_remote_auth_sync(remote: RemoteBackendSettings, *, force_refresh: bool = False) -> str | None:
     _ensure_auth_configured(remote)
 
@@ -271,33 +476,7 @@ def resolve_remote_auth_sync(remote: RemoteBackendSettings, *, force_refresh: bo
     if explicit:
         return explicit
 
-    request_parts = _build_refresh_request(remote)
-    if request_parts is None:
-        return None
-
-    cache_key, token_endpoint, headers, form = request_parts
-    if force_refresh:
-        _TOKEN_CACHE.pop(cache_key, None)
-
-    cached = _get_cached_token(cache_key)
-    if cached and not force_refresh:
-        return cached
-
-    timeout = httpx.Timeout(20.0)
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        resp = client.post(token_endpoint, data=form, headers=headers)
-
-    if resp.status_code >= 400:
-        body = (resp.text or "").strip()
-        detail = body[:300] if body else f"HTTP {resp.status_code}"
-        raise RuntimeError(f"Remote OAuth token refresh failed: {detail}")
-
-    token, expires_in = _extract_token_payload(resp.json())
-    if not token:
-        raise RuntimeError("Remote OAuth token refresh did not return access_token")
-
-    _put_cached_token(cache_key, token, expires_in)
-    return token
+    return _refresh_remote_auth_sync(remote, force_refresh=force_refresh)
 
 
 async def resolve_remote_auth(remote: RemoteBackendSettings) -> str | None:
@@ -307,30 +486,7 @@ async def resolve_remote_auth(remote: RemoteBackendSettings) -> str | None:
     if explicit:
         return explicit
 
-    request_parts = _build_refresh_request(remote)
-    if request_parts is None:
-        return None
-
-    cache_key, token_endpoint, headers, form = request_parts
-    cached = _get_cached_token(cache_key)
-    if cached:
-        return cached
-
-    timeout = httpx.Timeout(20.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        resp = await client.post(token_endpoint, data=form, headers=headers)
-
-    if resp.status_code >= 400:
-        body = (resp.text or "").strip()
-        detail = body[:300] if body else f"HTTP {resp.status_code}"
-        raise RuntimeError(f"Remote OAuth token refresh failed: {detail}")
-
-    token, expires_in = _extract_token_payload(resp.json())
-    if not token:
-        raise RuntimeError("Remote OAuth token refresh did not return access_token")
-
-    _put_cached_token(cache_key, token, expires_in)
-    return token
+    return await _refresh_remote_auth(remote, force_refresh=False)
 
 
 async def resolve_remote_auth_force_refresh(remote: RemoteBackendSettings) -> str | None:
@@ -340,25 +496,39 @@ async def resolve_remote_auth_force_refresh(remote: RemoteBackendSettings) -> st
     if explicit:
         return explicit
 
-    request_parts = _build_refresh_request(remote)
-    if request_parts is None:
-        return None
+    return await _refresh_remote_auth(remote, force_refresh=True)
 
-    cache_key, token_endpoint, headers, form = request_parts
-    _TOKEN_CACHE.pop(cache_key, None)
 
-    timeout = httpx.Timeout(20.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        resp = await client.post(token_endpoint, data=form, headers=headers)
+def _bearer_header(token: str) -> str:
+    return token if token.lower().startswith("bearer ") else f"Bearer {token}"
 
-    if resp.status_code >= 400:
-        body = (resp.text or "").strip()
-        detail = body[:300] if body else f"HTTP {resp.status_code}"
-        raise RuntimeError(f"Remote OAuth token refresh failed: {detail}")
 
-    token, expires_in = _extract_token_payload(resp.json())
-    if not token:
-        raise RuntimeError("Remote OAuth token refresh did not return access_token")
+class RemoteBearerAuth(httpx2.Auth):
+    """Resolve the downstream bearer token per request and refresh once on 401."""
 
-    _put_cached_token(cache_key, token, expires_in)
-    return token
+    def __init__(self, remote: RemoteBackendSettings):
+        self.remote = remote
+
+    def sync_auth_flow(self, request):
+        raise RuntimeError("RemoteBearerAuth supports async transports only")
+
+    async def async_auth_flow(self, request):
+        token = await resolve_remote_auth(self.remote)
+        if token:
+            request.headers["Authorization"] = _bearer_header(token)
+        response = yield request
+        if response.status_code != 401 or not is_refresh_flow_configured(self.remote):
+            return
+        refreshed = await resolve_remote_auth_force_refresh(self.remote)
+        if not refreshed or refreshed == token:
+            return
+        request.headers["Authorization"] = _bearer_header(refreshed)
+        yield request
+
+
+def remote_client_auth(remote: RemoteBackendSettings) -> RemoteBearerAuth | None:
+    """Return per-request auth for remotes with credentials, else None."""
+    if _get_explicit_remote_auth(remote) or is_refresh_flow_configured(remote):
+        return RemoteBearerAuth(remote)
+    _ensure_auth_configured(remote)
+    return None

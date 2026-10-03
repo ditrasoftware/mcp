@@ -1,5 +1,10 @@
 # Lottomaticapss MCP
 
+The canonical application version is stored in `VERSION`, exported as
+`lottomaticapss_mcp.__version__`, and advertised in the MCP initialize response.
+Use `./set_version.sh <major.minor.patch>` before a release; `build.sh` always
+tags the image from that file.
+
 Generic scaffolding and baseline structure for Lottomaticapss MCP (Model Context Protocol) servers. This template provides:
 
 - **Infrastructure**: Authentication, settings, REST client, gateway capabilities
@@ -7,7 +12,105 @@ Generic scaffolding and baseline structure for Lottomaticapss MCP (Model Context
 - **Gateway Support**: Hybrid local/remote tool routing with configurable policy
 - **Extensibility**: Clear TODO sections for domain-specific tools, resources, prompts, and UI apps
 
+## Ditra Analytics (Metabase) integration
+
+This server includes a tool/resource/prompt set that connects to the Ditra
+Analytics platform — the self-hosted Metabase Pro instance behind the
+`lottomatica-dashboard-webapp` procurement portal (`https://analytics.ditra.io`,
+dashboard `30` "Lottomatica PSS Dashboard", collection `6` "Lottomatica PSS
+Analytics"). Since this MCP is dedicated to Ditra Analytics, tool/prompt
+names don't repeat a `ditra_analytics_` prefix.
+
+- **Client**: `metabase_client.py` — MCP-first client using the canonical
+  `/api/metabase-mcp` endpoint, augmented by the REST API for complete
+  dashboard layouts, parameterized dashboard cards, and explicit pagination.
+- **MCP-first tools**: `search`, `get_card`, `run_card_query`,
+  `run_native_query`, and continuation-aware `query`.
+- **Explicit REST collisions**: `api_search`, `api_get_card`,
+  `api_run_card_query`, and `api_run_native_query`.
+- **REST-only augmentations**: `get_dashboard`, `list_dashboard_cards`,
+  `list_dashboard_cards_markdown`, `get_dashboard_card_data`, and
+  `list_collection_items`. Use `list_dashboard_cards_markdown` when the caller
+  requests a complete Markdown table; it renders every row server-side. Use
+  `list_dashboard_cards` for complete compact card discovery. `get_dashboard`
+  is compact by default; pass `full=true` for the complete (very large)
+  definition. Search, dashboard-card, and collection listings accept bounded
+  `limit`/`offset` pagination.
+- **Saved-card visualizations**: `visualize_card` renders a card with its saved
+  display and visualization settings through the `ui://lottomaticapss/saved-card.html`
+  MCP App, which frames a short-lived signed static embed. It requires
+  `METABASE_EMBEDDING_SECRET_KEY` and the card published for embedding (Sharing →
+  Embed → Static/Guest embed → Publish). Unpublished cards return a message
+  pointing to `visualize_card_query`, which uses the automatic chart viewer
+  (saved pie/area/combo types are not preserved there).
+- **KPI answering layer** (`analytics_assistant.py`, REST-backed):
+  - `answer_dashboard_kpi` is the first choice for a saved dashboard KPI.
+    Supply its name, an explicit period, and a source (e.g. `Numero Gare`,
+    `2025-01-01..2026-12-31`, `PSS` or `Niuma`). It selects the saved card on
+    the KPI tab, applies the dashboard's mapped date-range target, and runs
+    the card in dashboard context. It reports ambiguous cards or missing
+    mappings instead of guessing a model/date field. The active browser
+    filter value is not available to the MCP; pass the desired period.
+  - `answer_kpi` answers a question in one call, e.g. "ordinato lordo IVA di
+    Novaconnect nei primi 6 mesi del 2025" → total `Ord. Lordo IVA EURO`,
+    a monthly breakdown, the source, the filters applied, and the matched
+    supplier field. It tries the fallbacks in this order: a saved question
+    (`card_id` + `card_parameters`), then dynamic MBQL, then native SQL (only
+    if permitted). If all are blocked, it returns the exact MBQL/SQL text and
+    the reason. This model-based tool is for ad hoc KPIs, not reproducing
+    saved dashboard tiles.
+  - `discover_entity_fields` ranks the entity fields (Fornitore, Conto
+    fornitore, supplier_key) with confidence and sample matches.
+    `profile_field_values` returns the top values or a fuzzy match.
+  - `build_mbql_query` generates typed MBQL (legacy, MBQL 5 and portable).
+    `validate_mbql_query` validates a query and dry-runs it.
+  - `can_run_native_query` checks native SQL permission up front, returning
+    the reason and the fallback. `get_card_parameters` introspects
+    saved-question parameters.
+  - `list_kpi_sources` (use `evaluate=true` for live checks) and
+    `describe_kpi_source` (use `expand=true` for all columns) cover source
+    selection. The canonical source is model 685 `model_zrep_oda_detail`, with
+    date `oda_date_for_filter` and the default filter `is_pss_order = 1`, as
+    in card 840.
+- **Resources**: `ditra-analytics://config`, `ditra-analytics://dashboard-summary`.
+- **Prompts**: `getting_started`, `explore_dashboard_workflow`.
+
+Configuration (see `.env_example`):
+
+```env
+METABASE_SITE_URL=https://analytics.ditra.io
+METABASE_MCP_URL=https://analytics.ditra.io/api/metabase-mcp
+METABASE_ACCESS_MODE=mcp_first
+METABASE_API_FALLBACK_ENABLED=true
+METABASE_API_KEY=
+METABASE_DEFAULT_PAGE_SIZE=100
+METABASE_MAX_PAGE_SIZE=500
+METABASE_DEFAULT_DASHBOARD_ID=30
+METABASE_DEFAULT_COLLECTION_ID=6
+LOTTOMATICAPSS_KPI_SOURCE_CARD_ID=685
+LOTTOMATICAPSS_KPI_DATE_FIELD=
+```
+
+Every tool result includes `_meta.backend` (`mcp` or `api`) and, where useful,
+the reason REST was selected. The MCP path is the default; REST fallback can be
+disabled with `METABASE_API_FALLBACK_ENABLED=false`, or all hybrid tools can be
+forced to REST with `METABASE_ACCESS_MODE=api_only`.
+
+Hashed tool names are compatibility aliases for clients that require namespaced
+backend identifiers; they are not stored artifacts. In `auto` mode they are
+advertised only to Claude-like clients. Set `DITRASOFTWARE_HASHED_TOOL_ALIASES`
+to `always` or `never` to override this dynamically, and inspect the active
+policy through `ditra-analytics://config`.
+
+Tool/prompt descriptions and resource content are branded "Ditra Analytics";
+the underlying Python module/class names and `METABASE_*` env vars keep the
+literal "Metabase" naming since they map directly to the real external
+system (same convention the webapp itself uses: UI branded "Ditra", technical
+env vars named `METABASE_*`).
+
 ## Structure
+
+
 
 ```
 lottomaticapss_mcp/
@@ -16,16 +119,17 @@ lottomaticapss_mcp/
 ├── auth.py                  # Auth helpers
 ├── oauth.py                 # OAuth/OIDC provider
 ├── rest_client.py           # Generic REST client
+├── metabase_client.py       # Ditra Analytics (Metabase) REST client
 ├── settings.py              # Configuration
 ├── server.py                # MCP server + middleware
 ├── maps.py                  # Mapping/location resources (TODO)
 ├── gateway/                 # Gateway implementation (copy from ferreromed_mcp)
 ├── providers/
 │   ├── __init__.py
-│   ├── local_tools.py       # Domain-specific tools (TODO)
-│   ├── local_resources.py   # Domain-specific resources (TODO)
-│   ├── local_prompts.py     # Domain-specific prompts (TODO)
-│   └── local_apps.py        # Domain-specific UI apps (TODO)
+│   ├── local_tools.py       # Ditra Analytics tools
+│   ├── local_resources.py   # Ditra Analytics resources
+│   ├── local_prompts.py     # Ditra Analytics prompts
+│   └── local_apps.py        # Ditra Analytics prefab app catalog
 ├── apps/                    # Prefab UI apps (empty)
 ├── prompts/                 # Prompt templates (empty)
 ├── resources/               # Resource definitions (empty)
@@ -56,13 +160,26 @@ export LOTTOMATICAPSS_GATEWAY_MOUNT_ON_STARTUP=true
 export LOTTOMATICAPSS_GATEWAY_ALLOW_DIRECT_CALLS=true
 export LOTTOMATICAPSS_GATEWAY_DIRECT_RESULT_STRATEGY=passthrough  # or normalized
 
-# Optional: configure remote MCP backends
+# Preferred: mount the canonical Ditra Analytics MCP
+# Supply the production streamable HTTP endpoint through deployment configuration.
+# When omitted, the gateway uses the existing METABASE_MCP_URL configuration.
+# Do not set this to a Metabase REST endpoint.
+export LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_URL="https://<analytics-mcp-host>/mcp"
+export LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_ENABLED=true
+
+# Authenticate the gateway to Ditra Analytics with either a service bearer token
+# or the existing OAuth refresh-token variables. Keep these deployment secrets.
+export LOTTOMATICAPSS_GATEWAY_REMOTE_DITRA_ANALYTICS_ACCESS_TOKEN="Bearer <service-token>"
+
+# Advanced: configure one or more remote MCP backends explicitly. This takes
+# precedence over LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_URL.
 export LOTTOMATICAPSS_GATEWAY_REMOTES_JSON='[
   {
-    "name": "toolbox-mssql",
-    "namespace": "toolbox_mssql",
+    "name": "ditra-analytics",
+    "namespace": "ditra_analytics",
     "type": "streamable-http",
-    "url": "http://toolbox:5000/mcp/mssql"
+    "url": "https://<analytics-mcp-host>/mcp",
+    "auth": "__auto__"
   }
 ]'
 
@@ -76,6 +193,43 @@ export FASTMCP_HOST=0.0.0.0
 export FASTMCP_PORT=8001
 export FASTMCP_STREAMABLE_HTTP_PATH=/mcp
 ```
+
+With `LOTTOMATICAPSS_GATEWAY_MOUNT_ON_STARTUP=true`, FastMCP mounts the remote
+as a namespaced provider. Use `tools/list` to obtain the exact mounted names;
+the mount, rather than `gateway_call_remote_tool`, is the intended path for
+MCP Apps tools such as `visualize_query` because it preserves the provider's
+tool and UI metadata. `gateway_call_remote_tool` and
+`gateway_call_tool_namespaced` remain useful for diagnostics and non-UI calls.
+The gateway advertises the MCP Apps UI extension to the Analytics backend by
+default (`LOTTOMATICAPSS_GATEWAY_ADVERTISE_MCP_APPS_UI=true`), which is required
+for Metabase to advertise `visualize_query` and `render_drill_through`. Outer
+MCP clients still need their own MCP Apps support to render those tools.
+
+`LOTTOMATICAPSS_DITRA_ANALYTICS_OAUTH_SCOPES` defaults to the complete current
+Analytics scope set, including SQL, content authoring, and MCP Apps. Changes to
+this setting require reauthorizing the downstream connection because OAuth
+refresh grants cannot gain scopes after issuance.
+
+Use `gateway_list_backends`, `gateway_list_remote_tools`, and
+`registry_summary` to verify the configured and mounted `ditra-analytics`
+backend. `gateway_discover_remote_tools`, `gateway_suggest_remote_tools`, and
+`gateway_detect_tool_collisions` expose direct-call addresses in the form
+`remote:ditra-analytics:construct_query` and make any remote collisions
+explicit. Local Lottomatica tools remain preferred under the default
+`local_preferred` route policy. A `query_handle` accepted by the local `query`
+tool can be produced by the mounted Ditra Analytics `construct_query` tool.
+
+### Connect downstream OAuth on mcp-2
+
+Set a high-entropy `LOTTOMATICAPSS_DOWNSTREAM_ADMIN_TOKEN` in the protected
+deployment `.env`. Then open
+`https://mcp.lottomatica-pss.ditra.app/admin/downstreams/ditra-analytics/connect`
+and authenticate with HTTP Basic using any username and that token as the
+password. The gateway registers its client, handles the PKCE callback, and
+stores the refresh grant in its persistent FastMCP volume. Restart the
+container once after the connection completes so FastMCP mounts the
+authenticated remote. The local bootstrap script is not required for this
+deployed flow.
 
 ### 2. Install Dependencies
 

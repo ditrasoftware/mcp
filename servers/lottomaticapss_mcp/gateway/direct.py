@@ -5,11 +5,13 @@ import time
 from typing import Any
 
 from fastmcp import Client
+from mcp.client import advertise
 
 from ..settings import GatewaySettings, RemoteBackendSettings
 from .remote_auth import (
     GatewayAuthConfigurationError,
     is_refresh_flow_configured,
+    remote_client_auth,
     resolve_remote_auth,
     resolve_remote_auth_force_refresh,
 )
@@ -140,6 +142,13 @@ async def _call_with_client(
     }
     if auth:
         client_kwargs["auth"] = auth
+    if remote.name == "ditra-analytics":
+        client_kwargs["extensions"] = [
+            advertise(
+                "io.modelcontextprotocol/ui",
+                {"mimeTypes": ["text/html;profile=mcp-app"]},
+            )
+        ]
 
     async with Client(remote.url, **client_kwargs) as client:
         return await operation(client)
@@ -299,3 +308,178 @@ async def call_remote_tool_direct(
         return getattr(result, "data")
 
     return result
+
+
+async def call_remote_tools_in_session(
+    gateway: GatewaySettings,
+    *,
+    remote_name: str,
+    calls: list[tuple[str, dict[str, Any]]],
+) -> list[Any]:
+    """Call a sequence of remote tools in one downstream MCP session.
+
+    Metabase query handles are session-bound, so constructing and visualizing a
+    saved card must share the same downstream client connection.
+    """
+    remote = get_remote_backend(gateway, remote_name=remote_name)
+    if remote is None:
+        raise ValueError(f"Unknown remote backend: {remote_name}")
+    if remote.type != "streamable-http":
+        raise ValueError(f"Unsupported remote type for direct call: {remote.type}")
+
+    auth = remote_client_auth(remote)
+    client_kwargs: dict[str, Any] = {
+        "timeout": max(remote.timeout_ms / 1000.0, 1.0),
+    }
+    if auth is not None:
+        client_kwargs["auth"] = auth
+    if remote.name == "ditra-analytics":
+        client_kwargs["extensions"] = [
+            advertise(
+                "io.modelcontextprotocol/ui",
+                {"mimeTypes": ["text/html;profile=mcp-app"]},
+            )
+        ]
+
+    async with Client(remote.url, **client_kwargs) as client:
+        return [
+            await client.call_tool_mcp(tool_name, arguments)
+            for tool_name, arguments in calls
+        ]
+
+
+async def construct_and_visualize_remote_query(
+    gateway: GatewaySettings,
+    *,
+    remote_name: str,
+    query: dict[str, Any],
+    prompt: str,
+) -> Any:
+    """Construct and visualize a query in one downstream MCP session."""
+    remote = get_remote_backend(gateway, remote_name=remote_name)
+    if remote is None:
+        raise ValueError(f"Unknown remote backend: {remote_name}")
+    if remote.type != "streamable-http":
+        raise ValueError(f"Unsupported remote type for direct call: {remote.type}")
+
+    auth = remote_client_auth(remote)
+    client_kwargs: dict[str, Any] = {
+        "timeout": max(remote.timeout_ms / 1000.0, 1.0),
+    }
+    if auth is not None:
+        client_kwargs["auth"] = auth
+    if remote.name == "ditra-analytics":
+        client_kwargs["extensions"] = [
+            advertise(
+                "io.modelcontextprotocol/ui",
+                {"mimeTypes": ["text/html;profile=mcp-app"]},
+            )
+        ]
+
+    async with Client(remote.url, **client_kwargs) as client:
+        constructed = await client.call_tool_mcp(
+            "construct_query",
+            {"query": query, "prompt": prompt},
+        )
+        handle = (constructed.structured_content or {}).get("query_handle")
+        if not isinstance(handle, str) or not handle:
+            raise ValueError("Analytics did not return a query handle")
+        return await client.call_tool_mcp(
+            "visualize_query",
+            {"query": None, "query_handle": handle},
+        )
+
+
+async def discover_remote_tools_with_namespaces(
+    gateway: GatewaySettings,
+) -> dict[str, Any]:
+    """Discover remote tools with stable direct-invocation names."""
+    from .namespace import RemoteToolNamespace
+
+    namespace = RemoteToolNamespace(gateway)
+    tools_by_remote: dict[str, Any] = {}
+    namespaced_tools: dict[str, dict[str, str]] = {}
+    collision_map: dict[str, set[str]] = {}
+
+    for remote in gateway.remotes:
+        if not remote.enabled or remote.type != "streamable-http":
+            continue
+        try:
+            tool_names = await list_remote_tools(gateway, remote_name=remote.name)
+        except Exception as exc:
+            tools_by_remote[remote.name] = {"error": str(exc), "tools": []}
+            continue
+
+        tools: list[dict[str, str]] = []
+        for tool_name in tool_names:
+            full_name = namespace.make_full_name(remote.name, tool_name)
+            info = {
+                "name": tool_name,
+                "remote": remote.name,
+                "namespace": remote.namespace,
+                "full_name": full_name,
+            }
+            tools.append(info)
+            namespaced_tools[full_name] = info
+            collision_map.setdefault(tool_name, set()).add(remote.name)
+        tools_by_remote[remote.name] = {"tools": tools}
+
+    collisions = {
+        tool_name: sorted(remotes)
+        for tool_name, remotes in collision_map.items()
+        if len(remotes) > 1
+    }
+    return {
+        "tools_by_remote": tools_by_remote,
+        "namespaced_tools": namespaced_tools,
+        "collisions": collisions,
+        "total_remotes": len([remote for remote in gateway.remotes if remote.enabled]),
+        "total_tools": len(namespaced_tools),
+        "collision_count": len(collisions),
+    }
+
+
+async def call_remote_tool_by_namespace(
+    gateway: GatewaySettings,
+    *,
+    full_name: str,
+    arguments: dict[str, Any] | None = None,
+    result_strategy: str | None = None,
+) -> Any:
+    """Call a remote tool addressed as remote:<remote_name>:<tool_name>."""
+    from .namespace import RemoteToolNamespace
+
+    parsed = RemoteToolNamespace.parse_full_name(full_name)
+    if parsed is None:
+        raise ValueError(
+            "Invalid namespaced tool name. Expected: remote:<remote_name>:<tool_name>."
+        )
+    remote_name, tool_name = parsed
+    return await call_remote_tool_direct(
+        gateway,
+        remote_name=remote_name,
+        tool_name=tool_name,
+        arguments=arguments,
+        result_strategy=result_strategy,
+    )
+
+
+async def get_remote_tool_suggestions(
+    gateway: GatewaySettings,
+    *,
+    partial_name: str | None = None,
+) -> dict[str, Any]:
+    """Return namespaced remote tools, optionally filtered by a partial name."""
+    discovery = await discover_remote_tools_with_namespaces(gateway)
+    tools = discovery["namespaced_tools"]
+    if not partial_name:
+        return {"suggestions": sorted(tools), "total": len(tools)}
+
+    query = partial_name.lower()
+    matches = {name: info for name, info in tools.items() if query in name.lower()}
+    return {
+        "query": partial_name,
+        "suggestions": sorted(matches),
+        "total": len(matches),
+        "tools": matches,
+    }
