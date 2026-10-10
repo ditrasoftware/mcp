@@ -260,6 +260,34 @@ class QueryBuilderTests(unittest.TestCase):
 
 
 class CardParameterTests(unittest.TestCase):
+    def test_list_template_tags_match_legacy_map_metadata(self):
+        fake = FakeMetabase()
+        card = run(fake("GET", "/api/card/900"))
+        expected = run(assistant_with(fake).get_card_parameters(900))
+        tags = list(card["dataset_query"]["native"]["template-tags"].values())
+
+        async def modern_card(method, path, **kwargs):
+            self.assertEqual((method, path), ("GET", "/api/card/900"))
+            return {**card, "dataset_query": {"database": 2, "lib/type": "mbql/query",
+                "stages": [{"lib/type": "mbql.stage/native", "template-tags": tags}]}}
+
+        actual = run(assistant_with(modern_card).get_card_parameters(900))
+        self.assertEqual(actual["parameters"], expected["parameters"])
+        self.assertEqual(actual["example_payload"], expected["example_payload"])
+
+    def test_list_template_tags_preserve_declared_defaults_and_required(self):
+        async def card(method, path, **kwargs):
+            return {"id": 850, "dataset_query": {"stages": [{"template-tags": [
+                {"name": "category", "type": "text", "id": "category", "required": True, "default": "IT"},
+                {"name": "optional", "type": "text", "id": "optional"}]}]}}
+
+        result = run(assistant_with(card).get_card_parameters(850))
+        by_slug = {param["slug"]: param for param in result["parameters"]}
+        self.assertTrue(by_slug["category"]["required"])
+        self.assertEqual(by_slug["category"]["default"], "IT")
+        self.assertFalse(by_slug["optional"]["required"])
+        self.assertIsNone(by_slug["optional"]["default"])
+
     def test_introspection_and_payload(self):
         assistant = assistant_with(FakeMetabase())
         result = run(assistant.get_card_parameters(900))

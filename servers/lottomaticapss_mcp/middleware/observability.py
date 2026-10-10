@@ -10,8 +10,31 @@ from fastmcp.server.context import Context
 from fastmcp.utilities.logging import get_logger
 import uuid
 import time
+import logging
+from copy import deepcopy
+from urllib.parse import urlsplit
 
 logger = get_logger("lottomaticapss.requests")
+
+
+class RedactAccessQueryFilter(logging.Filter):
+    def filter(self, record):
+        if isinstance(record.args, tuple) and len(record.args) == 5:
+            client, method, target, protocol, status = record.args
+            parsed = urlsplit(str(target))
+            if parsed.query:
+                target = parsed._replace(query="[REDACTED]").geturl()
+                record.args = (client, method, target, protocol, status)
+        return True
+
+
+def access_log_config():
+    from uvicorn.config import LOGGING_CONFIG
+
+    config = deepcopy(LOGGING_CONFIG)
+    config.setdefault("filters", {})["redact_query"] = {"()": RedactAccessQueryFilter}
+    config["handlers"]["access"]["filters"] = ["redact_query"]
+    return config
 
 
 class ObservabilityMiddleware(Middleware):
@@ -44,7 +67,12 @@ class ObservabilityMiddleware(Middleware):
         try:
             result = await call_next(context)
             duration_ms = (time.time() - start) * 1000
-            logger.info("tools/call %s ok %.0fms", getattr(context.message, "name", "?"), duration_ms)
+            failed = bool(getattr(result, "is_error", False) or getattr(result, "isError", False))
+            metadata = getattr(result, "meta", None)
+            rendering = metadata.get("lottomaticapss/rendering") if isinstance(metadata, dict) else None
+            prepared = isinstance(rendering, dict) and rendering.get("status") == "prepared"
+            status = "failed" if failed else "prepared" if prepared else "ok"
+            logger.info("tools/call %s %s %.0fms", getattr(context.message, "name", "?"), status, duration_ms)
             # Could emit metric: tool_call_success, tenant, duration
             return result
         except Exception as e:

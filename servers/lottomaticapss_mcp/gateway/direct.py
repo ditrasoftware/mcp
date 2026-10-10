@@ -10,11 +10,9 @@ from mcp.client import advertise
 from ..settings import GatewaySettings, RemoteBackendSettings
 from .remote_auth import (
     GatewayAuthConfigurationError,
-    is_refresh_flow_configured,
     remote_client_auth,
-    resolve_remote_auth,
-    resolve_remote_auth_force_refresh,
 )
+from .proxy import _retained_client_factory
 
 
 def _dump_content_block(block: Any) -> dict[str, Any]:
@@ -116,15 +114,14 @@ def _raise_auth_diagnostic(remote: RemoteBackendSettings, *, action: str, exc: E
     if "insufficient_scope" in lowered or "scope" in lowered:
         raise RuntimeError(
             f"Remote auth failed during {action} for {remote.name}: insufficient OAuth scope. "
-            "Update GOOGLE_WORKSPACE_MCP_OAUTH_SCOPE to include required Google scopes, "
-            "re-run OAuth bootstrap, then retry. Original error: "
+            "Authorize the required scopes for this integration connection, then retry. Original error: "
             f"{text}"
         ) from exc
 
     if _looks_like_auth_failure(exc):
         raise RuntimeError(
             f"Remote auth failed during {action} for {remote.name}: token rejected or expired. "
-            "Check GOOGLE_WORKSPACE_MCP_BEARER_TOKEN or refresh-token settings, then refresh token. "
+            "Reconnect the authorized integration account; do not switch to another credential identity. "
             f"Original error: {text}"
         ) from exc
 
@@ -134,9 +131,14 @@ def _raise_auth_diagnostic(remote: RemoteBackendSettings, *, action: str, exc: E
 async def _call_with_client(
     remote: RemoteBackendSettings,
     *,
-    auth: str | None,
+    auth: Any,
     operation: Any,
 ) -> Any:
+    if remote.name == "ditra-analytics":
+        client = await _retained_client_factory(remote=remote,
+            timeout_seconds=max(remote.timeout_ms / 1000.0, 1.0), advertise_mcp_apps_ui=True)
+        async with client:
+            return await operation(client)
     client_kwargs: dict[str, Any] = {
         "timeout": max(remote.timeout_ms / 1000.0, 1.0),
     }
@@ -161,21 +163,13 @@ async def _execute_remote_operation(
     operation: Any,
 ) -> Any:
     try:
-        auth = await resolve_remote_auth(remote)
+        auth = remote_client_auth(remote)
     except GatewayAuthConfigurationError as exc:
         raise RuntimeError(f"Remote auth configuration error for {remote.name}: {exc}") from exc
 
     try:
         return await _call_with_client(remote, auth=auth, operation=operation)
     except Exception as exc:
-        can_retry = _looks_like_auth_failure(exc) and is_refresh_flow_configured(remote)
-        if can_retry:
-            try:
-                refreshed_auth = await resolve_remote_auth_force_refresh(remote)
-                return await _call_with_client(remote, auth=refreshed_auth, operation=operation)
-            except Exception as retry_exc:
-                _raise_auth_diagnostic(remote, action=action, exc=retry_exc)
-
         _raise_auth_diagnostic(remote, action=action, exc=exc)
 
 
@@ -327,25 +321,12 @@ async def call_remote_tools_in_session(
     if remote.type != "streamable-http":
         raise ValueError(f"Unsupported remote type for direct call: {remote.type}")
 
-    auth = remote_client_auth(remote)
-    client_kwargs: dict[str, Any] = {
-        "timeout": max(remote.timeout_ms / 1000.0, 1.0),
-    }
-    if auth is not None:
-        client_kwargs["auth"] = auth
-    if remote.name == "ditra-analytics":
-        client_kwargs["extensions"] = [
-            advertise(
-                "io.modelcontextprotocol/ui",
-                {"mimeTypes": ["text/html;profile=mcp-app"]},
-            )
-        ]
-
-    async with Client(remote.url, **client_kwargs) as client:
+    async def operation(client):
         return [
             await client.call_tool_mcp(tool_name, arguments)
             for tool_name, arguments in calls
         ]
+    return await _call_with_client(remote, auth=remote_client_auth(remote), operation=operation)
 
 
 async def construct_and_visualize_remote_query(
@@ -362,25 +343,13 @@ async def construct_and_visualize_remote_query(
     if remote.type != "streamable-http":
         raise ValueError(f"Unsupported remote type for direct call: {remote.type}")
 
-    auth = remote_client_auth(remote)
-    client_kwargs: dict[str, Any] = {
-        "timeout": max(remote.timeout_ms / 1000.0, 1.0),
-    }
-    if auth is not None:
-        client_kwargs["auth"] = auth
-    if remote.name == "ditra-analytics":
-        client_kwargs["extensions"] = [
-            advertise(
-                "io.modelcontextprotocol/ui",
-                {"mimeTypes": ["text/html;profile=mcp-app"]},
-            )
-        ]
-
-    async with Client(remote.url, **client_kwargs) as client:
+    async def operation(client):
         constructed = await client.call_tool_mcp(
             "construct_query",
             {"query": query, "prompt": prompt},
         )
+        if constructed.is_error:
+            return constructed
         handle = (constructed.structured_content or {}).get("query_handle")
         if not isinstance(handle, str) or not handle:
             raise ValueError("Analytics did not return a query handle")
@@ -388,6 +357,7 @@ async def construct_and_visualize_remote_query(
             "visualize_query",
             {"query": None, "query_handle": handle},
         )
+    return await _call_with_client(remote, auth=remote_client_auth(remote), operation=operation)
 
 
 async def discover_remote_tools_with_namespaces(

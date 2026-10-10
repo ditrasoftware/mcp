@@ -1,0 +1,46 @@
+services:
+  ditra-sso-pilot:
+    build:
+      context: ../..
+      dockerfile: servers/lottomaticapss_mcp/Dockerfile
+    image: lottomaticapss-mcp:ditra-sso-pilot
+    container_name: lottomaticapss-mcp-ditra-sso-pilot
+    environment:
+      FASTMCP_HOST: 0.0.0.0
+      FASTMCP_PORT: "8001"
+      FASTMCP_STREAMABLE_HTTP_PATH: /mcp
+      FASTMCP_STATELESS_HTTP: "true"
+      LOTTOMATICAPSS_MCP_AUTH_MODE: oidc_proxy
+      LOTTOMATICAPSS_MCP_BASE_URL: ${DITRA_PILOT_BASE_URL:?Set the approved pilot HTTPS base URL}
+      LOTTOMATICAPSS_OIDC_CONFIG_URL: https://login.microsoftonline.com/09150482-f0ba-4f90-b762-a639c1cb7a40/v2.0/.well-known/openid-configuration
+      LOTTOMATICAPSS_OIDC_CLIENT_ID: ${DITRA_PILOT_CLIENT_ID:?Set the pilot Application client ID}
+      LOTTOMATICAPSS_OIDC_CLIENT_SECRET: ${DITRA_PILOT_CLIENT_SECRET:?Set the pilot client secret securely}
+      LOTTOMATICAPSS_OIDC_JWT_SIGNING_KEY: ${DITRA_PILOT_SIGNING_KEY:?Set a separate pilot signing key securely}
+      LOTTOMATICAPSS_OIDC_REQUIRED_SCOPES: openid profile email offline_access
+      LOTTOMATICAPSS_OIDC_VERIFY_ID_TOKEN: "true"
+      LOTTOMATICAPSS_OIDC_FORWARD_RESOURCE: "false"
+      LOTTOMATICAPSS_OIDC_TOKEN_ENDPOINT_AUTH_METHOD: client_secret_post
+      LOTTOMATICAPSS_OIDC_ALLOWED_CLIENT_REDIRECT_URIS: ${DITRA_PILOT_CLIENT_REDIRECT_URIS:?Set approved MCP client callback URLs}
+      LOTTOMATICAPSS_DITRA_ANALYTICS_MCP_ENABLED: "false"
+      LOTTOMATICAPSS_GATEWAY_REMOTES_JSON: "[]"
+      LOTTOMATICAPSS_GATEWAY_ENABLE_TOOLBOX: "false"
+      LOTTOMATICAPSS_GATEWAY_ALLOW_DIRECT_CALLS: "false"
+      METABASE_API_KEY: ""
+      METABASE_USERNAME: ""
+      METABASE_PASSWORD: ""
+      METABASE_EMBEDDING_SECRET_KEY: ""
+      LOTTOMATICAPSS_DOWNSTREAM_ADMIN_TOKEN: ""
+    ports:
+      - "127.0.0.1:${DITRA_PILOT_HOST_PORT:-8098}:8001"
+    volumes:
+      - ditra_pilot_oauth:/root/.local/share/fastmcp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  ditra_pilot_oauth:

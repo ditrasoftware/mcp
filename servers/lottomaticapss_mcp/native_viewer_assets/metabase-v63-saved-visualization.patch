@@ -1,0 +1,365 @@
+diff --git a/frontend/src/embedding-sdk-bundle/components/public/InteractiveQuestion/InteractiveQuestion.schema.ts b/frontend/src/embedding-sdk-bundle/components/public/InteractiveQuestion/InteractiveQuestion.schema.ts
+index 70f62517..ac0e062e 100644
+--- a/frontend/src/embedding-sdk-bundle/components/public/InteractiveQuestion/InteractiveQuestion.schema.ts
++++ b/frontend/src/embedding-sdk-bundle/components/public/InteractiveQuestion/InteractiveQuestion.schema.ts
+@@ -21,6 +21,7 @@ const propsSchema: Yup.SchemaOf<InteractiveQuestionInternalProps> = Yup.object({
+   dataPicker: Yup.mixed().optional(),
+   height: Yup.mixed().optional(),
+   initialSqlParameters: Yup.mixed().optional(),
++  initialVisualization: Yup.mixed().optional(),
+   sqlParameters: Yup.mixed().optional(),
+   onSqlParametersChange: Yup.mixed().optional(),
+   hiddenParameters: Yup.mixed().optional(),
+diff --git a/frontend/src/embedding-sdk-bundle/components/public/SdkQuestion/SdkQuestion.tsx b/frontend/src/embedding-sdk-bundle/components/public/SdkQuestion/SdkQuestion.tsx
+index d1fa87a4..338fd9a8 100644
+--- a/frontend/src/embedding-sdk-bundle/components/public/SdkQuestion/SdkQuestion.tsx
++++ b/frontend/src/embedding-sdk-bundle/components/public/SdkQuestion/SdkQuestion.tsx
+@@ -83,12 +83,9 @@ export type DrillThroughQuestionProps = Omit<
+  * @category InteractiveQuestion
+  */
+ export type SdkQuestionProps = SdkQuestionDefaultViewProps &
+-  // TEMP: initialVisualization is disabled at the public boundary. The internal
+-  // plumbing (provider, use-load-question, run-question-query) is kept; re-enable
+-  // by removing it from this Omit and restoring the prop forwarding below.
+   Omit<
+     SdkQuestionProviderProps,
+-    "componentPlugins" | "initialVisualization"
++    "componentPlugins"
+   > & {
+     plugins?: SdkQuestionProviderProps["componentPlugins"];
+   };
+@@ -132,6 +129,7 @@ export const _SdkQuestion = ({
+   token,
+   options,
+   deserializedCard,
++  initialVisualization,
+   plugins,
+   onNavigateBack,
+   children = null,
+@@ -196,6 +194,7 @@ export const _SdkQuestion = ({
+         token={token}
+         options={options}
+         deserializedCard={deserializedCard}
++        initialVisualization={initialVisualization}
+         componentPlugins={plugins}
+         onNavigateBack={onNavigateBack}
+         onBeforeSave={onBeforeSave}
+diff --git a/frontend/src/metabase/app-embed-mcp-public-path.ts b/frontend/src/metabase/app-embed-mcp-public-path.ts
+index f3b17238..6b039563 100644
+--- a/frontend/src/metabase/app-embed-mcp-public-path.ts
++++ b/frontend/src/metabase/app-embed-mcp-public-path.ts
+@@ -23,13 +23,16 @@
+ declare let __webpack_public_path__: string;
+ 
+ const instanceUrl: string = window.metabaseConfig?.instanceUrl ?? "";
++const assetUrl = (window.metabaseConfig as { assetUrl?: string } | undefined)?.assetUrl;
+ 
+ // In hot/dev mode `output.publicPath` is already an absolute localhost URL served
+ // by the dev server, so leave it alone — only the relative production path needs
+ // to be rewritten to the instance.
+ const runtimePathIsAbsolute = /^https?:\/\//.test(__webpack_public_path__);
+ 
+-if (instanceUrl && !runtimePathIsAbsolute) {
++if (assetUrl && !runtimePathIsAbsolute) {
++  __webpack_public_path__ = assetUrl.endsWith("/") ? assetUrl : `${assetUrl}/`;
++} else if (instanceUrl && !runtimePathIsAbsolute) {
+   const base = instanceUrl.endsWith("/") ? instanceUrl : `${instanceUrl}/`;
+   __webpack_public_path__ = `${base}app/dist/`;
+ }
+diff --git a/frontend/src/metabase/app-embed-mcp-public-path.unit.spec.ts b/frontend/src/metabase/app-embed-mcp-public-path.unit.spec.ts
+index d3cdf7a6..0ece952e 100644
+--- a/frontend/src/metabase/app-embed-mcp-public-path.unit.spec.ts
++++ b/frontend/src/metabase/app-embed-mcp-public-path.unit.spec.ts
+@@ -57,4 +57,15 @@ describe("app-embed-mcp-public-path", () => {
+ 
+     expect(getRuntimePublicPath()).toBe("app/dist/");
+   });
++
++  it("loads patched chunks from the gateway while retaining the analytics API origin", async () => {
++    setRuntimePublicPath("app/dist/");
++    (window as any).metabaseConfig = {
++      instanceUrl: "https://mb.example.com",
++      assetUrl: "https://gateway.example.com/native-viewer/assets/",
++    };
++    await loadModule();
++    expect(getRuntimePublicPath()).toBe("https://gateway.example.com/native-viewer/assets/");
++    expect((window as any).metabaseConfig.instanceUrl).toBe("https://mb.example.com");
++  });
+ });
+diff --git a/frontend/src/metabase/embedding/mcp/McpUiAppRoute.tsx b/frontend/src/metabase/embedding/mcp/McpUiAppRoute.tsx
+index 47f2940e..a1ae3dae 100644
+--- a/frontend/src/metabase/embedding/mcp/McpUiAppRoute.tsx
++++ b/frontend/src/metabase/embedding/mcp/McpUiAppRoute.tsx
+@@ -33,6 +33,7 @@ interface McpUiAppRouteContentProps {
+   mcpSessionId: string;
+   prompt: McpAppState["prompt"];
+   query: McpAppState["query"];
++  savedVisualization: McpAppState["savedVisualization"];
+   uiCredential: string;
+ }
+ 
+@@ -60,6 +61,7 @@ export function McpUiAppRoute() {
+     uiCredential,
+     prompt,
+     query,
++    savedVisualization,
+   } = useMcpApp();
+ 
+   const scheme: ResolvedColorScheme =
+@@ -95,6 +97,7 @@ export function McpUiAppRoute() {
+         mcpSessionId={mcpSessionId}
+         prompt={prompt}
+         query={query}
++        savedVisualization={savedVisualization}
+         uiCredential={uiCredential}
+       />
+     </ComponentProvider>
+@@ -109,6 +112,7 @@ function McpUiAppRouteContent({
+   mcpSessionId,
+   prompt,
+   query,
++  savedVisualization,
+   uiCredential,
+ }: McpUiAppRouteContentProps) {
+   const isHosted = useSelector(getIsHosted);
+@@ -125,8 +129,8 @@ function McpUiAppRouteContent({
+       return null;
+     }
+ 
+-    return getMcpDeserializedCard(query);
+-  }, [query]);
++    return getMcpDeserializedCard(query, savedVisualization);
++  }, [query, savedVisualization]);
+ 
+   const { isSettingsReady, userAndSettingsFetchError } =
+     useMcpUserAndSettingsFetch({
+@@ -226,6 +230,7 @@ function McpUiAppRouteContent({
+     deserializedCard && (
+       <SdkQuestion
+         deserializedCard={deserializedCard}
++        initialVisualization={savedVisualization?.display}
+         isSaveEnabled={false}
+         // we should never show query builder in chat interfaces
+         withEditorButton={false}
+diff --git a/frontend/src/metabase/embedding/mcp/McpUiAppRoute.utils.ts b/frontend/src/metabase/embedding/mcp/McpUiAppRoute.utils.ts
+index a7c2d4e1..482326d8 100644
+--- a/frontend/src/metabase/embedding/mcp/McpUiAppRoute.utils.ts
++++ b/frontend/src/metabase/embedding/mcp/McpUiAppRoute.utils.ts
+@@ -1,17 +1,55 @@
+ import { b64_to_utf8 } from "metabase/utils/encoding";
+-import type { Card, VisualizationSettings } from "metabase-types/api";
++import type { Card, CardDisplayType, VisualizationSettings } from "metabase-types/api";
++
++export interface McpSavedVisualization {
++  version: 1;
++  display: CardDisplayType;
++  settings: VisualizationSettings;
++  name?: string;
++}
++
++const SAVED_DISPLAYS = new Set(["bar", "row", "line", "area", "pie", "combo", "table", "scalar", "pivot"]);
++
++export function getMcpSavedVisualization(value: unknown): McpSavedVisualization | null {
++  if (typeof value !== "object" || value === null || Array.isArray(value)) {
++    return null;
++  }
++  const candidate = value as Record<string, unknown>;
++  if (
++    candidate.version !== 1 ||
++    typeof candidate.display !== "string" ||
++    !SAVED_DISPLAYS.has(candidate.display) ||
++    typeof candidate.settings !== "object" ||
++    candidate.settings === null ||
++    Array.isArray(candidate.settings) ||
++    (candidate.name !== undefined && typeof candidate.name !== "string")
++  ) {
++    return null;
++  }
++  return {
++    version: 1,
++    display: candidate.display as CardDisplayType,
++    settings: candidate.settings as VisualizationSettings,
++    ...(typeof candidate.name === "string" ? { name: candidate.name.slice(0, 160) } : {}),
++  };
++}
+ 
+ export const MCP_APP_VISUALIZATION_SETTINGS: VisualizationSettings = {
+   "graph.x_axis.labels_enabled": false,
+   "graph.y_axis.labels_enabled": false,
+ };
+ 
+-export function getMcpDeserializedCard(query: string): Card | null {
++export function getMcpDeserializedCard(query: string, savedVisualization?: unknown): Card | null {
+   try {
++    const saved = savedVisualization === undefined ? null : getMcpSavedVisualization(savedVisualization);
++    if (savedVisualization !== undefined && !saved) {
++      return null;
++    }
+     return {
+-      display: "table",
++      display: saved?.display ?? "table",
++      ...(saved ? { displayIsLocked: true, name: saved.name } : {}),
+       dataset_query: JSON.parse(b64_to_utf8(query)),
+-      visualization_settings: MCP_APP_VISUALIZATION_SETTINGS,
++      visualization_settings: saved?.settings ?? MCP_APP_VISUALIZATION_SETTINGS,
+     } as Card;
+   } catch {
+     return null;
+diff --git a/frontend/src/metabase/embedding/mcp/McpUiAppRoute.utils.unit.spec.ts b/frontend/src/metabase/embedding/mcp/McpUiAppRoute.utils.unit.spec.ts
+index 84fc94dc..f14f5239 100644
+--- a/frontend/src/metabase/embedding/mcp/McpUiAppRoute.utils.unit.spec.ts
++++ b/frontend/src/metabase/embedding/mcp/McpUiAppRoute.utils.unit.spec.ts
+@@ -1,8 +1,39 @@
+ import { utf8_to_b64 } from "metabase/utils/encoding";
+ 
+-import { getMcpDeserializedCard } from "./McpUiAppRoute.utils";
++import { getMcpDeserializedCard, getMcpSavedVisualization } from "./McpUiAppRoute.utils";
+ 
+ describe("getMcpDeserializedCard", () => {
++  it("preserves and locks supported saved displays without overwriting settings", () => {
++    const query = utf8_to_b64(JSON.stringify({ database: 1, type: "query", query: {} }));
++    for (const display of ["combo", "area", "pie", "bar", "row", "line", "table", "scalar", "pivot"]) {
++      const settings = { "graph.x_axis.labels_enabled": true, "graph.series_order": ["2025", "2026"] };
++      expect(getMcpDeserializedCard(query, { version: 1, display, settings, name: "Saved question" })).toEqual(
++        expect.objectContaining({ display, displayIsLocked: true, name: "Saved question", visualization_settings: settings }),
++      );
++    }
++  });
++
++  it("retains saved pivot grouping and scalar field selections", () => {
++    const query = utf8_to_b64(JSON.stringify({ database: 2, type: "query", query: {} }));
++    const pivotSettings = { "pivot_table.column_split": { rows: ["status"], columns: [], values: ["count"] } };
++    const scalarSettings = { "scalar.field": "sum", "scalar.compact_primary_number": true };
++    for (const [display, settings] of [["pivot", pivotSettings], ["scalar", scalarSettings]]) {
++      const card = getMcpDeserializedCard(query, { version: 1, display, settings });
++      expect(card?.display).toBe(display);
++      expect(card?.visualization_settings).toEqual(settings);
++      expect(card).toEqual(expect.objectContaining({ displayIsLocked: true }));
++    }
++  });
++
++  it("rejects invalid saved contracts rather than silently rendering another chart", () => {
++    const query = utf8_to_b64(JSON.stringify({ database: 1, type: "query", query: {} }));
++    for (const saved of [null, [], {}, { version: 2, display: "combo", settings: {} },
++      { version: 1, display: "unknown", settings: {} }, { version: 1, display: "combo", settings: [] }]) {
++      expect(getMcpSavedVisualization(saved)).toBeNull();
++      expect(getMcpDeserializedCard(query, saved)).toBeNull();
++    }
++  });
++
+   it("hides axis labels for MCP App ad-hoc charts", () => {
+     const datasetQuery = { database: 1, type: "query", query: {} };
+     const query = utf8_to_b64(JSON.stringify(datasetQuery));
+diff --git a/frontend/src/metabase/embedding/mcp/hooks/useMcpApp.tsx b/frontend/src/metabase/embedding/mcp/hooks/useMcpApp.tsx
+index 1e7acbef..6cdb93fc 100644
+--- a/frontend/src/metabase/embedding/mcp/hooks/useMcpApp.tsx
++++ b/frontend/src/metabase/embedding/mcp/hooks/useMcpApp.tsx
+@@ -9,9 +9,11 @@ import {
+ import { useCallback, useEffect, useRef, useState } from "react";
+ 
+ import { useMcpUiAuth } from "../auth";
++import { type McpSavedVisualization, getMcpSavedVisualization } from "../McpUiAppRoute.utils";
+ 
+ export interface McpAppState {
+   query: string | null;
++  savedVisualization: McpSavedVisualization | undefined;
+ 
+   uiCredential: string;
+   mcpSessionId: string;
+@@ -30,6 +32,7 @@ export interface McpAppState {
+ type VisualizeQueryToolResult = {
+   query?: string;
+   prompt?: string;
++  saved_visualization?: unknown;
+ };
+ 
+ function applyHostContext(ctx: McpUiHostContext) {
+@@ -48,6 +51,8 @@ function applyHostContext(ctx: McpUiHostContext) {
+ 
+ export function useMcpApp(): McpAppState {
+   const [query, setQuery] = useState<string | null>(null);
++  const [savedVisualization, setSavedVisualization] = useState<McpSavedVisualization>();
++  const [payloadError, setPayloadError] = useState<string | null>(null);
+   const [toolResultVersion, setToolResultVersion] = useState(0);
+   const pendingToolResultRef = useRef<VisualizeQueryToolResult | null>(null);
+   const [prompt, setPrompt] = useState<string | null>(null);
+@@ -66,12 +71,17 @@ export function useMcpApp(): McpAppState {
+       };
+ 
+       app.ontoolresult = (params) => {
+-        const { query, prompt } =
++        const { query, prompt, saved_visualization } =
+           (params.structuredContent as VisualizeQueryToolResult | undefined) ??
+           {};
+ 
+         if (query) {
+-          pendingToolResultRef.current = { query, prompt };
++          if (saved_visualization !== undefined && !getMcpSavedVisualization(saved_visualization)) {
++            setPayloadError("Saved visualization settings are invalid or unsupported.");
++            return;
++          }
++          setPayloadError(null);
++          pendingToolResultRef.current = { query, prompt, saved_visualization };
+ 
+           setToolResultVersion((version) => version + 1);
+         }
+@@ -88,6 +98,7 @@ export function useMcpApp(): McpAppState {
+ 
+     setQuery(toolResult.query);
+     setPrompt(toolResult.prompt ?? null);
++    setSavedVisualization(getMcpSavedVisualization(toolResult.saved_visualization) ?? undefined);
+   }, []);
+ 
+   const {
+@@ -114,10 +125,11 @@ export function useMcpApp(): McpAppState {
+ 
+   return {
+     query,
++    savedVisualization,
+     prompt,
+     uiCredential,
+     mcpSessionId,
+-    hostError: authError,
++    hostError: payloadError ?? authError,
+     hostContext,
+     app,
+   };
+diff --git a/frontend/src/metabase/embedding/mcp/hooks/useMcpApp.unit.spec.tsx b/frontend/src/metabase/embedding/mcp/hooks/useMcpApp.unit.spec.tsx
+index d841176d..03e59e72 100644
+--- a/frontend/src/metabase/embedding/mcp/hooks/useMcpApp.unit.spec.tsx
++++ b/frontend/src/metabase/embedding/mcp/hooks/useMcpApp.unit.spec.tsx
+@@ -72,6 +72,34 @@ jest.mock("@modelcontextprotocol/ext-apps/react", () => ({
+ }));
+ 
+ describe("useMcpApp", () => {
++  it("retains saved visualization settings after credential renewal and clears them for an ordinary query", async () => {
++    const { app, result } = setup({
++      callServerTool: jest.fn().mockResolvedValue(createAuthResult()),
++      getHostCapabilities: jest.fn(() => ({ serverTools: {} })),
++    });
++    const saved = { version: 1, display: "combo", settings: { "graph.x_axis.labels_enabled": true } };
++    await act(async () => app.ontoolresult({
++      ...QUERY_RESULT,
++      structuredContent: { query: "encoded-query", saved_visualization: saved },
++    }));
++    expect(result.current.savedVisualization).toEqual(saved);
++    await act(async () => app.ontoolresult(NEXT_QUERY_RESULT));
++    expect(result.current.savedVisualization).toBeUndefined();
++  });
++
++  it("reports invalid saved visualization settings without starting credential renewal", async () => {
++    const { app, result } = setup({
++      callServerTool: jest.fn().mockResolvedValue(createAuthResult()),
++      getHostCapabilities: jest.fn(() => ({ serverTools: {} })),
++    });
++    act(() => app.ontoolresult({
++      ...QUERY_RESULT,
++      structuredContent: { query: "encoded-query", saved_visualization: { version: 2 } },
++    }));
++    expect(result.current.hostError).toBe("Saved visualization settings are invalid or unsupported.");
++    expect(app.callServerTool).not.toHaveBeenCalled();
++  });
++
+   afterEach(() => {
+     jest.useRealTimers();
+     jest.restoreAllMocks();

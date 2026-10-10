@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from contextlib import contextmanager, nullcontext
+import hashlib
+import math
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 import json
 import os
+import random
 import re
 import tempfile
 import threading
@@ -15,8 +18,10 @@ from typing import Any
 
 import httpx
 import httpx2
+from cryptography.fernet import Fernet
 
 from ..settings import RemoteBackendSettings
+from .connections import current_connection, separation_enabled
 
 try:
     import fcntl
@@ -31,6 +36,7 @@ class _TokenCacheEntry:
 
 
 _TOKEN_CACHE: dict[str, _TokenCacheEntry] = {}
+_REFRESH_FAILURES: dict[str, tuple[float, str]] = {}
 _AUTO_AUTH_SENTINEL = "__auto__"
 _RUNTIME_REMOTE_SECRETS: dict[str, dict[str, str]] | None = None
 _REFRESH_LOCKS: dict[str, threading.Lock] = {}
@@ -56,7 +62,19 @@ def _sanitize_id(value: str) -> str:
 
 
 def _runtime_remote_id(remote: RemoteBackendSettings) -> str:
+    connection = current_connection(remote.name)
+    if connection is not None:
+        return f"connection:{connection.credential_ref}"
     return f"{_sanitize_id(remote.name)}__{_sanitize_id(remote.namespace)}"
+
+
+def _credential_cipher() -> Fernet | None:
+    key = _clean(os.getenv("LOTTOMATICAPSS_GATEWAY_REMOTE_AUTH_ENCRYPTION_KEY"))
+    if key:
+        return Fernet(key.encode())
+    if separation_enabled():
+        raise GatewayAuthConfigurationError("Connection credentials require encrypted storage")
+    return None
 
 
 def _runtime_store_path() -> Path | None:
@@ -72,7 +90,8 @@ def _refresh_file_lock(remote: RemoteBackendSettings):
             yield
         return
 
-    lock_path = store_path.with_name(f"{store_path.name}.{_sanitize_id(remote.name)}.lock")
+    partition = hashlib.sha256(_refresh_lock_key(remote).encode()).hexdigest()[:16]
+    lock_path = store_path.with_name(f"{store_path.name}.{partition}.lock")
     lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -91,8 +110,15 @@ def _load_runtime_remote_secrets() -> dict[str, dict[str, str]]:
     if path is None or not path.exists():
         return _RUNTIME_REMOTE_SECRETS
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        content = path.read_bytes()
+        cipher = _credential_cipher()
+        if cipher is not None:
+            content = cipher.decrypt(content)
+        data = json.loads(content)
     except Exception:
+        if separation_enabled():
+            _RUNTIME_REMOTE_SECRETS = None
+            raise GatewayAuthConfigurationError("Connection credential store could not be decrypted or parsed") from None
         return _RUNTIME_REMOTE_SECRETS
     if not isinstance(data, dict):
         return _RUNTIME_REMOTE_SECRETS
@@ -119,8 +145,12 @@ def _write_runtime_remote_secrets() -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            json.dump(_load_runtime_remote_secrets(), output)
+        content = json.dumps(_load_runtime_remote_secrets()).encode()
+        cipher = _credential_cipher()
+        if cipher is not None:
+            content = cipher.encrypt(content)
+        with os.fdopen(fd, "wb") as output:
+            output.write(content)
         os.chmod(tmp_name, 0o600)
         os.replace(tmp_name, path)
     finally:
@@ -209,6 +239,8 @@ def _candidate_env_names(remote: RemoteBackendSettings, key: str) -> list[str]:
 
 def _get_remote_env(remote: RemoteBackendSettings, key: str) -> str | None:
     runtime_value = _load_runtime_remote_secrets().get(_runtime_remote_id(remote), {}).get(key)
+    if current_connection(remote.name) is not None:
+        return _clean(runtime_value)
     return _clean(runtime_value) or _first_set_env(_candidate_env_names(remote, key))
 
 
@@ -236,13 +268,13 @@ def _cache_key(
     method: str,
 ) -> str:
     return (
-        f"{remote.name}|{remote.namespace}|{token_endpoint}|{client_id or ''}|"
+        f"{remote.name}|{remote.namespace}|{_runtime_remote_id(remote)}|{token_endpoint}|{client_id or ''}|"
         f"{method}|{scope or ''}"
     )
 
 
 def _refresh_lock_key(remote: RemoteBackendSettings) -> str:
-    return f"{remote.name}|{remote.namespace}"
+    return f"{remote.name}|{remote.namespace}|{_runtime_remote_id(remote)}"
 
 
 def _get_refresh_lock(remote: RemoteBackendSettings) -> threading.Lock:
@@ -257,6 +289,46 @@ def _get_async_refresh_lock(remote: RemoteBackendSettings) -> asyncio.Lock:
         return _ASYNC_REFRESH_LOCKS.setdefault(key, asyncio.Lock())
 
 
+@asynccontextmanager
+async def _async_refresh_file_lock(remote: RemoteBackendSettings):
+    store_path = _runtime_store_path()
+    if store_path is None or fcntl is None:
+        yield
+        return
+    partition = hashlib.sha256(_refresh_lock_key(remote).encode()).hexdigest()[:16]
+    lock_path = store_path.with_name(f"{store_path.name}.{partition}.lock")
+    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        acquired = False
+        try:
+            while not acquired:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                except BlockingIOError:
+                    await asyncio.sleep(0.01)
+            yield
+        finally:
+            if acquired:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+async def set_runtime_remote_credentials_async(
+    remote: RemoteBackendSettings,
+    credentials: dict[str, str],
+    *,
+    allow_account_change: bool = False,
+) -> None:
+    async with _get_async_refresh_lock(remote):
+        async with _async_refresh_file_lock(remote):
+            _reload_runtime_remote_secrets()
+            existing_account = _get_remote_env(remote, "ACCOUNT_ID")
+            if (existing_account and credentials.get("ACCOUNT_ID") != existing_account
+                    and not allow_account_change):
+                raise ValueError("Downstream account mapping changed during authorization")
+            set_runtime_remote_credentials(remote, credentials)
+
+
 def _get_cached_token(key: str) -> str | None:
     entry = _TOKEN_CACHE.get(key)
     if not entry:
@@ -268,11 +340,12 @@ def _get_cached_token(key: str) -> str | None:
 
 
 def _put_cached_token(key: str, token: str, expires_in_seconds: int | float | None) -> None:
-    ttl = 3600
-    if isinstance(expires_in_seconds, (int, float)) and expires_in_seconds > 0:
-        ttl = int(expires_in_seconds)
-    # Keep cache short-lived to avoid stale auth state after scope/policy changes.
-    safe_ttl = min(max(ttl - 60, 60), 300)
+    if (not isinstance(expires_in_seconds, (int, float)) or isinstance(expires_in_seconds, bool)
+            or not math.isfinite(expires_in_seconds) or expires_in_seconds <= 0):
+        _TOKEN_CACHE.pop(key, None)
+        return
+    ttl = float(expires_in_seconds)
+    safe_ttl = max(ttl - min(60, ttl * 0.1), 0) * random.uniform(0.9, 1.0)
     _TOKEN_CACHE[key] = _TokenCacheEntry(token=token, expires_at=time.time() + safe_ttl)
 
 
@@ -338,19 +411,22 @@ def _extract_token_payload(payload: Any) -> tuple[str | None, int | float | None
             expires_in = float(expires_in)
         except ValueError:
             expires_in = None
-    if isinstance(expires_in, (int, float)) and expires_in <= 0:
-        expires_in = None
+    if isinstance(expires_in, (int, float)) and (isinstance(expires_in, bool)
+            or not math.isfinite(expires_in) or expires_in <= 0):
+        raise RuntimeError("Remote OAuth returned an invalid token lifetime")
     return token, expires_in
 
 
 def _get_explicit_remote_auth(remote: RemoteBackendSettings) -> str | None:
+    if current_connection(remote.name) is not None and is_refresh_flow_configured(remote):
+        return None
     # Runtime env token is highest priority and re-evaluated per call.
     token = _get_remote_env(remote, "ACCESS_TOKEN")
     if token:
         return token
 
     # Static remote.auth is lower priority and mainly a fallback.
-    auth = _clean(remote.auth)
+    auth = None if current_connection(remote.name) is not None else _clean(remote.auth)
     if auth and auth != _AUTO_AUTH_SENTINEL:
         return auth
 
@@ -386,6 +462,8 @@ def _ensure_auth_configured(remote: RemoteBackendSettings) -> None:
         return
     if is_refresh_flow_configured(remote):
         return
+    if current_connection(remote.name) is not None:
+        raise GatewayAuthConfigurationError("Connection required: no downstream OAuth grant is configured")
     if not _is_google_workspace_remote(remote):
         return
 
@@ -399,10 +477,41 @@ def _ensure_auth_configured(remote: RemoteBackendSettings) -> None:
 
 
 def clear_remote_auth_cache(remote: RemoteBackendSettings) -> None:
-    prefix = f"{remote.name}|{remote.namespace}|"
+    prefix = f"{remote.name}|{remote.namespace}|{_runtime_remote_id(remote)}|"
     keys = [k for k in _TOKEN_CACHE if k.startswith(prefix)]
     for key in keys:
         _TOKEN_CACHE.pop(key, None)
+    for key in list(_REFRESH_FAILURES):
+        if key.startswith(prefix):
+            _REFRESH_FAILURES.pop(key, None)
+
+
+def _check_refresh_failure(cache_key: str) -> None:
+    failure = _REFRESH_FAILURES.get(cache_key)
+    if failure is None:
+        return
+    deadline, reason = failure
+    if deadline > time.monotonic():
+        raise RuntimeError(f"Remote OAuth refresh unavailable: {reason}")
+    _REFRESH_FAILURES.pop(cache_key, None)
+
+
+def _refresh_payload(response: httpx.Response, cache_key: str) -> Any:
+    if response.status_code < 400:
+        return response.json()
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    reason = payload.get("error") if isinstance(payload, dict) else None
+    terminal = reason in {"invalid_grant", "invalid_client", "unauthorized_client", "invalid_scope"}
+    detail = "reconnection required" if terminal else f"HTTP {response.status_code}"
+    if terminal:
+        detail = f"{reason}; {detail}"
+    _REFRESH_FAILURES[cache_key] = (
+        float("inf") if terminal else time.monotonic() + 5, detail
+    )
+    raise RuntimeError(f"Remote OAuth token refresh failed: {detail}")
 
 
 def _refresh_remote_auth_sync(remote: RemoteBackendSettings, *, force_refresh: bool) -> str | None:
@@ -419,16 +528,12 @@ def _refresh_remote_auth_sync(remote: RemoteBackendSettings, *, force_refresh: b
             cached = _get_cached_token(cache_key)
             if cached and not force_refresh:
                 return cached
+            _check_refresh_failure(cache_key)
 
             timeout = httpx.Timeout(20.0)
             with httpx.Client(timeout=timeout, follow_redirects=True) as client:
                 resp = client.post(token_endpoint, data=form, headers=headers)
-            if resp.status_code >= 400:
-                body = (resp.text or "").strip()
-                detail = body[:300] if body else f"HTTP {resp.status_code}"
-                raise RuntimeError(f"Remote OAuth token refresh failed: {detail}")
-
-            payload = resp.json()
+            payload = _refresh_payload(resp, cache_key)
             token, expires_in = _extract_token_payload(payload)
             if not token:
                 raise RuntimeError("Remote OAuth token refresh did not return access_token")
@@ -437,30 +542,32 @@ def _refresh_remote_auth_sync(remote: RemoteBackendSettings, *, force_refresh: b
             return token
 
 
-async def _refresh_remote_auth(remote: RemoteBackendSettings, *, force_refresh: bool) -> str | None:
+async def _refresh_remote_auth(
+    remote: RemoteBackendSettings, *, force_refresh: bool, rejected_token: str | None = None
+) -> str | None:
     async with _get_async_refresh_lock(remote):
-        with _refresh_file_lock(remote):
+        async with _async_refresh_file_lock(remote):
             _reload_runtime_remote_secrets()
             request_parts = _build_refresh_request(remote)
             if request_parts is None:
                 return None
 
             cache_key, token_endpoint, headers, form = request_parts
+            cached = _get_cached_token(cache_key)
+            if cached and (not force_refresh or (rejected_token is not None and cached != rejected_token)):
+                return cached
             if force_refresh:
                 _TOKEN_CACHE.pop(cache_key, None)
-            cached = _get_cached_token(cache_key)
-            if cached and not force_refresh:
-                return cached
+            _check_refresh_failure(cache_key)
 
             timeout = httpx.Timeout(20.0)
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                resp = await client.post(token_endpoint, data=form, headers=headers)
-            if resp.status_code >= 400:
-                body = (resp.text or "").strip()
-                detail = body[:300] if body else f"HTTP {resp.status_code}"
-                raise RuntimeError(f"Remote OAuth token refresh failed: {detail}")
-
-            payload = resp.json()
+                try:
+                    resp = await client.post(token_endpoint, data=form, headers=headers)
+                except httpx.RequestError:
+                    _REFRESH_FAILURES[cache_key] = (time.monotonic() + 5, "transport unavailable")
+                    raise RuntimeError("Remote OAuth refresh transport unavailable") from None
+            payload = _refresh_payload(resp, cache_key)
             token, expires_in = _extract_token_payload(payload)
             if not token:
                 raise RuntimeError("Remote OAuth token refresh did not return access_token")
@@ -489,14 +596,16 @@ async def resolve_remote_auth(remote: RemoteBackendSettings) -> str | None:
     return await _refresh_remote_auth(remote, force_refresh=False)
 
 
-async def resolve_remote_auth_force_refresh(remote: RemoteBackendSettings) -> str | None:
+async def resolve_remote_auth_force_refresh(
+    remote: RemoteBackendSettings, *, rejected_token: str | None = None
+) -> str | None:
     _ensure_auth_configured(remote)
 
     explicit = _get_explicit_remote_auth(remote)
     if explicit:
         return explicit
 
-    return await _refresh_remote_auth(remote, force_refresh=True)
+    return await _refresh_remote_auth(remote, force_refresh=True, rejected_token=rejected_token)
 
 
 def _bearer_header(token: str) -> str:
@@ -519,15 +628,30 @@ class RemoteBearerAuth(httpx2.Auth):
         response = yield request
         if response.status_code != 401 or not is_refresh_flow_configured(self.remote):
             return
-        refreshed = await resolve_remote_auth_force_refresh(self.remote)
+        refreshed = await resolve_remote_auth_force_refresh(self.remote, rejected_token=token)
         if not refreshed or refreshed == token:
             return
         request.headers["Authorization"] = _bearer_header(refreshed)
         yield request
 
 
-def remote_client_auth(remote: RemoteBackendSettings) -> RemoteBearerAuth | None:
+class RemoteAPIKeyAuth(httpx2.Auth):
+    def __init__(self, remote: RemoteBackendSettings):
+        self.remote = remote
+
+    def auth_flow(self, request):
+        key = _get_remote_env(self.remote, "API_KEY")
+        if not key:
+            raise GatewayAuthConfigurationError("Service connection API key is missing")
+        request.headers["X-API-Key"] = key
+        yield request
+
+
+def remote_client_auth(remote: RemoteBackendSettings) -> httpx2.Auth | None:
     """Return per-request auth for remotes with credentials, else None."""
+    connection = current_connection(remote.name)
+    if connection is not None and connection.mode == "service" and _get_remote_env(remote, "API_KEY"):
+        return RemoteAPIKeyAuth(remote)
     if _get_explicit_remote_auth(remote) or is_refresh_flow_configured(remote):
         return RemoteBearerAuth(remote)
     _ensure_auth_configured(remote)

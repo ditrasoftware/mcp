@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.server.providers.skills import SkillProvider
 
 from ...rest_client import LottomaticapssRestClient
 from ...settings import LottomaticapssSettings
 from ...metabase_client import MetabaseClient
+
+BUSINESS_SKILL_PATH = Path(__file__).resolve().parents[2] / "skills" / "lottomatica-pss" / "SKILL.md"
+BUSINESS_SKILL_URI = "skill://lottomatica-pss/SKILL.md"
 
 
 def register_local_resources(
@@ -18,6 +23,10 @@ def register_local_resources(
     """Register domain-specific local resources."""
 
     local_resource_registry: dict[str, Any] = {}
+    mcp.add_provider(SkillProvider(BUSINESS_SKILL_PATH.parent))
+    local_resource_registry[BUSINESS_SKILL_URI] = BUSINESS_SKILL_URI
+    manifest_uri = "skill://lottomatica-pss/_manifest"
+    local_resource_registry[manifest_uri] = manifest_uri
 
     @mcp.resource(uri="ditra-analytics://config")
     async def config_resource() -> dict[str, Any]:

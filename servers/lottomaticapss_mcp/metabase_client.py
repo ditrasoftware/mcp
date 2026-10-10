@@ -17,12 +17,16 @@ from typing import Any, Awaitable, Callable, Mapping
 import httpx
 
 from .settings import MetabaseSettings
+from .gateway.connections import current_connection
 
 
 class MetabaseClientError(RuntimeError):
-    def __init__(self, message: str, *, status_code: int | None = None):
+    def __init__(
+        self, message: str, *, status_code: int | None = None, allow_api_fallback: bool = True
+    ):
         super().__init__(message)
         self.status_code = status_code
+        self.allow_api_fallback = allow_api_fallback
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,21 @@ class MetabaseClient:
         return self._settings
 
     async def _auth_headers(self) -> dict[str, str]:
+        connection = current_connection("ditra-analytics")
+        if connection is not None:
+            from .gateway.remote_auth import _get_remote_env, resolve_remote_auth
+            from .settings import RemoteBackendSettings
+
+            remote = RemoteBackendSettings(name="ditra-analytics", namespace="ditra_analytics",
+                                           type="streamable-http", url=self._settings.mcp_url, auth="__auto__")
+            if connection.mode == "service":
+                key = _get_remote_env(remote, "API_KEY")
+                if key:
+                    return {"X-API-KEY": key}
+            token = await resolve_remote_auth(remote)
+            if not token:
+                raise MetabaseClientError("Connection required: downstream grant unavailable", allow_api_fallback=False)
+            return {"Authorization": token if token.lower().startswith("bearer ") else f"Bearer {token}"}
         if self._settings.api_key:
             return {"X-API-KEY": self._settings.api_key}
         token = await self._ensure_session_token()
@@ -68,6 +87,23 @@ class MetabaseClient:
                 raise MetabaseClientError("Ditra Analytics login did not return a session token")
             self._session_token = token
             return token
+
+    async def _renew_connection_token(self, headers: dict[str, str]) -> bool:
+        if current_connection("ditra-analytics") is None:
+            return False
+        authorization = headers.get("Authorization")
+        if not authorization:
+            return False
+        from .gateway.remote_auth import is_refresh_flow_configured, resolve_remote_auth_force_refresh
+        from .settings import RemoteBackendSettings
+
+        remote = RemoteBackendSettings(name="ditra-analytics", namespace="ditra_analytics",
+                                       type="streamable-http", url=self._settings.mcp_url, auth="__auto__")
+        if not is_refresh_flow_configured(remote):
+            return False
+        rejected = authorization[7:] if authorization.lower().startswith("bearer ") else authorization
+        renewed = await resolve_remote_auth_force_refresh(remote, rejected_token=rejected)
+        return bool(renewed and renewed != rejected)
 
     async def _request(
         self,
@@ -101,7 +137,11 @@ class MetabaseClient:
             except httpx.RequestError as e:
                 raise MetabaseClientError(f"Ditra Analytics request failed: {e}") from e
 
-        if resp.status_code == 401 and authed and _retry_on_401 and not self._settings.api_key:
+        if (resp.status_code == 401 and authed and _retry_on_401
+                and await self._renew_connection_token(headers)):
+            return await self._request(method, path, params=params, json=json, authed=authed, _retry_on_401=False)
+        if (resp.status_code == 401 and authed and _retry_on_401 and not self._settings.api_key
+            and current_connection("ditra-analytics") is None):
             # Session token likely expired; clear and retry once.
             self._session_token = None
             return await self._request(
@@ -141,13 +181,18 @@ class MetabaseClient:
         if payload.get("error"):
             error = payload["error"]
             detail = error.get("message") if isinstance(error, dict) else str(error)
-            raise MetabaseClientError(f"Ditra Analytics MCP error: {detail}")
+            raise MetabaseClientError(
+                f"Ditra Analytics MCP error: {detail}",
+                allow_api_fallback=isinstance(error, dict) and error.get("code") == -32601,
+            )
         result = payload.get("result")
         if not isinstance(result, dict):
             raise MetabaseClientError("Ditra Analytics MCP returned an invalid result")
         return result
 
-    async def _mcp_call(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+    async def _mcp_call(
+        self, tool_name: str, arguments: dict[str, Any], *, _retry_on_401: bool = True
+    ) -> Any:
         if not self._settings.mcp_url:
             raise MetabaseClientError("Ditra Analytics MCP URL is not configured")
 
@@ -211,7 +256,10 @@ class MetabaseClient:
                 if result.get("isError"):
                     content = result.get("content") or []
                     detail = content[0].get("text") if content and isinstance(content[0], dict) else None
-                    raise MetabaseClientError(detail or f"Ditra Analytics MCP tool {tool_name} failed")
+                    raise MetabaseClientError(
+                        detail or f"Ditra Analytics MCP tool {tool_name} failed",
+                        allow_api_fallback=isinstance(detail, str) and detail == f"Unknown tool: {tool_name}",
+                    )
                 if "structuredContent" in result:
                     return result["structuredContent"]
                 content = result.get("content") or []
@@ -223,6 +271,15 @@ class MetabaseClient:
                         return text
                 return result
             except httpx.HTTPStatusError as e:
+                if (e.response.status_code == 401 and _retry_on_401
+                        and await self._renew_connection_token(headers)):
+                    return await self._mcp_call(tool_name, arguments, _retry_on_401=False)
+                if (e.response.status_code == 401 and _retry_on_401
+                    and current_connection("ditra-analytics") is None
+                        and not self._settings.api_key
+                        and self._settings.username and self._settings.password):
+                    self._session_token = None
+                    return await self._mcp_call(tool_name, arguments, _retry_on_401=False)
                 raise MetabaseClientError(
                     f"Ditra Analytics MCP returned HTTP {e.response.status_code}",
                     status_code=e.response.status_code,
@@ -246,7 +303,8 @@ class MetabaseClient:
             try:
                 return MetabaseResult(await self._mcp_call(tool_name, arguments), "mcp")
             except MetabaseClientError as e:
-                if not self._settings.api_fallback_enabled:
+                if (e.status_code in {401, 403} or not e.allow_api_fallback
+                    or not self._settings.api_fallback_enabled):
                     raise
                 return MetabaseResult(await api_call(), "api", type(e).__name__)
         return MetabaseResult(await api_call(), "api")

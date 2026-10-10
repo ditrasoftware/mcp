@@ -125,6 +125,37 @@ def create_auth_provider() -> AuthProvider | None:
 
     resource_base_url = _env("LOTTOMATICAPSS_MCP_RESOURCE_BASE_URL")
 
+    if mode == "gcip":
+        from .gcip_auth import GCIPOAuthBridge
+
+        if not _env("LOTTOMATICAPSS_GATEWAY_CONNECTIONS_JSON"):
+            raise RuntimeError("GCIP mode requires explicit integration connection policies; use [] to deny downstream access")
+        subjects = tuple(_env_list("LOTTOMATICAPSS_GCIP_ALLOWED_SUBJECTS") or [])
+        access_claim = _env("LOTTOMATICAPSS_GCIP_ACCESS_CLAIM")
+        access_mode = (_env("LOTTOMATICAPSS_GCIP_ACCESS_MODE") or "subjects").lower()
+        if access_mode not in {"subjects", "claim", "tenant"}:
+            raise RuntimeError("LOTTOMATICAPSS_GCIP_ACCESS_MODE must be subjects, claim, or tenant")
+        configured_policy = (
+            bool(subjects) if access_mode == "subjects" else
+            bool(access_claim) if access_mode == "claim" else
+            not subjects and not access_claim
+        )
+        if not configured_policy:
+            raise RuntimeError(f"GCIP access mode '{access_mode}' has conflicting or missing policy settings")
+        return GCIPOAuthBridge(
+            project_id=_env("LOTTOMATICAPSS_GCIP_PROJECT_ID") or "",
+            tenant_id=_env("LOTTOMATICAPSS_GCIP_TENANT_ID") or "",
+            api_key=_env("LOTTOMATICAPSS_GCIP_WEB_API_KEY") or "",
+            auth_domain=_env("LOTTOMATICAPSS_GCIP_AUTH_DOMAIN") or "",
+            client_id=_env("LOTTOMATICAPSS_GCIP_CLIENT_ID") or "",
+            signing_key=_env("LOTTOMATICAPSS_GCIP_SIGNING_KEY") or "",
+            subjects=subjects,
+            access_claim=access_claim if access_mode == "claim" else None,
+            allow_any_tenant_user=access_mode == "tenant",
+            base_url=base_url,
+            allowed_client_redirect_uris=_env_list("LOTTOMATICAPSS_GCIP_CLIENT_REDIRECT_URIS") or [],
+        )
+
     if mode in {"oidc_proxy", "oidc", "oidc-proxy"}:
         config_url = _env("LOTTOMATICAPSS_OIDC_CONFIG_URL")
         client_id = _env("LOTTOMATICAPSS_OIDC_CLIENT_ID")
@@ -155,6 +186,7 @@ def create_auth_provider() -> AuthProvider | None:
             required_scopes=required_scopes,
             allowed_client_redirect_uris=allowed_redirect_uris,
             verify_id_token=verify_id_token,
+            forward_resource=_env_bool("LOTTOMATICAPSS_OIDC_FORWARD_RESOURCE", True),
             token_endpoint_auth_method=token_endpoint_auth_method,
         )
 

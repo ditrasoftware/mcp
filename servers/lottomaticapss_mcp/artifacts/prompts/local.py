@@ -18,9 +18,14 @@ def register_local_prompts(mcp: FastMCP, settings: LottomaticapssSettings | None
     @mcp.prompt()
     async def getting_started() -> str:
         """Getting started guide for the Ditra Analytics tools."""
-        return f"""# Ditra Analytics — Getting Started
+        return f"""# Lottomatica PSS MCP — Getting Started
 
 ## Overview
+
+This is the master business-context MCP for Lottomatica PSS. Ditra Analytics
+is its analytics integration; other federated integrations keep their own
+protocol contracts. Read `skill://lottomatica-pss/SKILL.md`, or call
+`get_business_guidance` if resources are unavailable, before choosing a workflow.
 
 These tools connect to the Ditra Analytics platform (the Lottomatica PSS
 procurement dashboards) so an agent can search, inspect, and query the same
@@ -62,6 +67,8 @@ dashboards/questions shown in the Ditra Analytics Procurement Portal.
 
 ## Resources
 
+- `skill://lottomatica-pss/SKILL.md` — business workflow and federation guidance.
+- `skill://lottomatica-pss/_manifest` — skill files and content hashes.
 - `ditra-analytics://config` — connection configuration (non-secret).
 - `ditra-analytics://dashboard-summary` — quick summary of the default dashboard.
 """

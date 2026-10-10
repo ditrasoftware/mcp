@@ -10,6 +10,8 @@ from ...rest_client import LottomaticapssAuth, LottomaticapssRestClient
 from ...settings import LottomaticapssSettings
 from ...metabase_client import MetabaseClient, MetabaseResult
 from ...analytics_assistant import AnalyticsAssistant, KpiError
+from ..resources.local import BUSINESS_SKILL_PATH
+from ...gateway.connections import integration_status
 
 
 def _kpi_error(e: KpiError) -> dict[str, Any]:
@@ -60,6 +62,7 @@ def register_local_tools(
     _apply_default_auth: Callable[..., LottomaticapssAuth],
     _coerce_positive_int: Callable[[int | str | None], int | None],
     metabase_client: MetabaseClient | None = None,
+    connection_setup: Any = None,
 ) -> set[str]:
     """Register domain-specific local tools."""
 
@@ -70,6 +73,43 @@ def register_local_tools(
         canonical_card_id=metabase.settings.kpi_source_card_id,
         date_field=metabase.settings.kpi_date_field,
     )
+
+    @mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False,
+                          "idempotentHint": True, "openWorldHint": False})
+    async def get_business_guidance() -> str:
+        """Read Lottomatica PSS business guidance before procurement, KPI, visualization, or federated workflows.
+
+        Returns the same skill published as skill://lottomatica-pss/SKILL.md.
+        Use when the client cannot read MCP resources or retrieve prompts.
+        """
+        return BUSINESS_SKILL_PATH.read_text(encoding="utf-8")
+
+    local_tool_names.add("get_business_guidance")
+
+    @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False,
+                          "idempotentHint": False, "openWorldHint": False})
+    async def list_integration_connections() -> dict[str, Any]:
+        """Return assigned integration states and expiring setup links for your Ditra Analytics account.
+
+        Configured indicates stored credentials, not permission for every operation.
+        An unconfigured Ditra Analytics account can start its own OAuth consent flow.
+        Service connections and disabled self-service require administrator provisioning.
+        """
+        result = integration_status()
+        if connection_setup is not None:
+            from ...gateway.connections import verified_principal
+            for item in result["connections"]:
+                if (item["mode"] == "delegated" and item["integration"] == "ditra-analytics"
+                        and item["state"] != "Configured"):
+                    setup = await connection_setup.ticket(verified_principal(), item["id"])
+                    item["setup_url"] = setup["setup_url"]
+                    item["setup_expires_in"] = setup["expires_in"]
+                    item["requested_scopes"] = setup.get("requested_scopes", [])
+                    item["permission_summary"] = setup.get("permission_summary", "")
+                    item["message"] = "The setup link expires after five minutes and requires the same master-login browser and separate analytics consent."
+        return result
+
+    local_tool_names.add("list_integration_connections")
 
     @mcp.tool()
     async def search(

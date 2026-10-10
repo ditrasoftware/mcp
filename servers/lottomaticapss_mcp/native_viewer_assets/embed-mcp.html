@@ -1,0 +1,69 @@
+<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="robots" content="noindex"/><base href="{{{instanceUrlRaw}}}/"/><title>Metabase</title><style>:root {
+        /* Allow light-dark() to work */
+        color-scheme: light dark;
+      }
+
+      body {
+        margin: 0;
+        height: 550px;
+      }
+
+      body {
+        background: var(--color-background-primary);
+        color: var(--color-text-primary);
+        font-family: var(--font-sans);
+      }
+
+      /* Allow Cursor and VS Code to have proper colors & fonts */
+      body.vscode-light,
+      body.vscode-dark,
+      body.vscode-high-contrast {
+        color: var(--vscode-foreground);
+        background: var(--vscode-editor-background);
+        font-family: var(--vscode-font-family);
+
+        /* Remove card padding from cursor */
+        padding: 0;
+      }
+
+      .mcp-loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+      }
+
+      @keyframes mcp-spinner-animation {
+        0% {
+          transform: rotate(0deg);
+        }
+
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      .mcp-spinner {
+        display: inline-block;
+        box-sizing: border-box;
+        width: 1.5rem;
+        height: 1.5rem;
+      }
+
+      .mcp-spinner::after {
+        content: "";
+        display: block;
+        box-sizing: border-box;
+        width: 1.5rem;
+        height: 1.5rem;
+        border-radius: 10000px;
+        border-width: calc(1.5rem / 8);
+        border-style: solid;
+        border-color: #509ee3 #509ee3 #509ee3 transparent;
+        animation: mcp-spinner-animation 1.2s linear infinite;
+      }</style><script>window.Metabase = window.Metabase || {};
+      window.Metabase.AssetErrorLoad = function (tag) {
+        console.error("Could not download asset " + tag.src);
+      };</script><script defer="defer" src="{{{instanceUrlRaw}}}/app/dist/runtime.89f71ea86790314f.js" onerror="Metabase.AssetErrorLoad(this)"></script><script defer="defer" src="{{{instanceUrlRaw}}}/app/dist/styles.cd4cbc9f3941e73d.js" onerror="Metabase.AssetErrorLoad(this)"></script><script defer="defer" src="{{{instanceUrlRaw}}}/app/dist/vendor.7886cca4a671ea1e.js" onerror="Metabase.AssetErrorLoad(this)"></script><script defer="defer" src="{{{instanceUrlRaw}}}/app/dist/app-embed-mcp.e101ce87456ec1b1.js" onerror="Metabase.AssetErrorLoad(this)"></script><link href="{{{instanceUrlRaw}}}/app/dist/styles.958569d2a6858e0e.css" rel="stylesheet"><link href="{{{instanceUrlRaw}}}/app/dist/vendor.91624b3c6602d162.css" rel="stylesheet"><link href="{{{instanceUrlRaw}}}/app/dist/app-embed-mcp.468a3349abb0d351.css" rel="stylesheet"></head><body><div id="root"></div><div id="mcp-loading" class="mcp-loading"><span class="mcp-spinner"></span></div><script>window.metabaseConfig = {
+        instanceUrl: {{{instanceUrl}}}
+      };</script></body></html>

@@ -28,6 +28,7 @@ from datetime import date
 from typing import Any
 
 from .metabase_client import MetabaseClient, MetabaseClientError
+from .gateway.connections import session_partition
 
 
 class KpiError(RuntimeError):
@@ -1171,9 +1172,9 @@ class AnalyticsAssistant:
         self._canonical_card_id = canonical_card_id
         self._date_field = date_field
         self._ttl = cache_ttl_seconds
-        self._sources: dict[tuple[str, int], tuple[float, KpiSource]] = {}
-        self._databases: dict[int, tuple[float, dict[str, Any]]] = {}
-        self._native: dict[int, tuple[float, dict[str, Any]]] = {}
+        self._sources: dict[tuple[str, str, int], tuple[float, KpiSource]] = {}
+        self._databases: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
+        self._native: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 
     @property
     def canonical_card_id(self) -> int:
@@ -1275,7 +1276,8 @@ class AnalyticsAssistant:
         return _parse_dataset(await self._call("POST", "/api/dataset", json=query))
 
     async def _database(self, database_id: int) -> dict[str, Any]:
-        cached = self._databases.get(database_id)
+        key = (session_partition(), database_id)
+        cached = self._databases.get(key)
         if cached and time.monotonic() - cached[0] < self._ttl:
             return cached[1]
         data = await self._call("GET", f"/api/database/{database_id}")
@@ -1285,7 +1287,7 @@ class AnalyticsAssistant:
             "engine": data.get("engine"),
             "native_permissions": data.get("native_permissions"),
         }
-        self._databases[database_id] = (time.monotonic(), info)
+        self._databases[key] = (time.monotonic(), info)
         return info
 
     # -- Sources --------------------------------------------------------------
@@ -1294,7 +1296,7 @@ class AnalyticsAssistant:
         if kind not in {"card", "table"}:
             raise KpiError("source kind must be 'card' or 'table'", error_type="invalid_input")
         source_id = source_id or self._canonical_card_id
-        key = (kind, source_id)
+        key = (session_partition(), kind, source_id)
         cached = self._sources.get(key)
         if cached and time.monotonic() - cached[0] < self._ttl:
             return cached[1]
@@ -1655,7 +1657,8 @@ class AnalyticsAssistant:
     async def can_run_native_query(self, database_id: int | None = None, *, probe: bool = False) -> dict[str, Any]:
         if database_id is None:
             database_id = (await self.load_source()).database_id
-        cached = self._native.get(database_id)
+        key = (session_partition(), database_id)
+        cached = self._native.get(key)
         if cached and not probe and time.monotonic() - cached[0] < self._ttl:
             return cached[1]
         fallback = (
@@ -1700,7 +1703,7 @@ class AnalyticsAssistant:
                 result.update(allowed=False, status="blocked", fallback=fallback)
                 if e.error_type == "missing-required-permissions":
                     result["reason"] = f"Probe 'SELECT 1' failed with missing-required-permissions on database {database_id}."
-        self._native[database_id] = (time.monotonic(), result)
+        self._native[key] = (time.monotonic(), result)
         return result
 
     async def get_card_parameters(
@@ -1708,10 +1711,29 @@ class AnalyticsAssistant:
     ) -> dict[str, Any]:
         card = await self._call("GET", f"/api/card/{card_id}")
         dataset_query = card.get("dataset_query") or {}
-        tags: dict[str, Any] = dict((dataset_query.get("native") or {}).get("template-tags") or {})
+        tags: dict[str, Any] = {}
+
+        def merge_tags(raw):
+            if raw is None:
+                return
+            if isinstance(raw, dict):
+                entries = raw.items()
+            elif isinstance(raw, list):
+                if any(not isinstance(tag, dict) or not isinstance(tag.get("name"), str)
+                       or not tag["name"] for tag in raw):
+                    raise ValueError("Saved question returned invalid template tags")
+                entries = ((tag["name"], tag) for tag in raw)
+            else:
+                raise ValueError("Saved question returned invalid template tags")
+            for name, tag in entries:
+                if not isinstance(name, str) or not name or not isinstance(tag, dict):
+                    raise ValueError("Saved question returned invalid template tags")
+                tags[name] = tag
+
+        merge_tags((dataset_query.get("native") or {}).get("template-tags"))
         for stage in dataset_query.get("stages") or []:
             if isinstance(stage, dict):
-                tags.update(stage.get("template-tags") or {})
+                merge_tags(stage.get("template-tags"))
         described: list[dict[str, Any]] = []
         seen: set[str] = set()
         for param in card.get("parameters") or []:

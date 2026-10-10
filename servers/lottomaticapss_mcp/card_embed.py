@@ -10,6 +10,9 @@ from typing import Any
 CARD_EMBED_URI = "ui://lottomaticapss/saved-card.html"
 CARD_EMBED_META_KEY = "lottomaticapss/saved-card"
 CARD_EMBED_MIME = "text/html;profile=mcp-app"
+ECHARTS_CARD_URI = "ui://ditra_analytics/metabase/echarts-saved-card.html"
+ECHARTS_CARD_META_KEY = "lottomaticapss/echarts-card"
+ECHARTS_CDN_INTEGRITY = "sha384-pPi0zxBAoDu6+JXW/C68UZLvBUUtU+7zonhif43rqj7pxsGyqyqzcian2Rj37Rss"
 
 
 def _b64url(data: bytes) -> str:
@@ -150,3 +153,80 @@ CARD_EMBED_HTML = """<!doctype html>
 })();
 </script></body></html>
 """.replace("__META_KEY__", CARD_EMBED_META_KEY)
+
+
+ECHARTS_CARD_RESOURCE_META = {
+    "ui": {
+        "domain": "https://analytics.ditra.io",
+        "csp": {"connectDomains": [], "resourceDomains": ["https://cdn.jsdelivr.net"]},
+        "prefersBorder": True,
+    }
+}
+
+
+ECHARTS_CARD_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ditra Analytics</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" integrity="__INTEGRITY__" crossorigin="anonymous"></script>
+<style>html,body,#chart{margin:0;width:100%;height:100%;min-height:360px}body{font:14px system-ui,sans-serif;color:#242a33}#status{padding:20px}</style></head>
+<body><div id="status">Loading saved chart…</div><div id="chart" role="img" aria-label="Saved Ditra Analytics chart" hidden></div>
+<script>
+(function(){
+  var KEY="__META_KEY__", parent=window.parent, id=1, pending={}, chart=null, rendered=false;
+  function send(message){parent.postMessage(message,"*");}
+  function request(method,params){var requestId=id++;send({jsonrpc:"2.0",id:requestId,method:method,params:params});return new Promise(function(resolve,reject){pending[requestId]={resolve:resolve,reject:reject};setTimeout(function(){if(pending[requestId]){delete pending[requestId];reject(new Error("Host request timed out"));}},5000);});}
+  function columnIndex(columns,names){for(var i=0;i<columns.length;i++){var column=columns[i]||{};if(names.indexOf(column.name)>=0||names.indexOf(column.display_name)>=0)return i;}return -1;}
+  function number(value){if(value===null||value===undefined||value==="")return null;var parsed=Number(value);return Number.isFinite(parsed)?parsed:null;}
+  function render(payload){if(rendered||!payload||!Array.isArray(payload.rows)||!Array.isArray(payload.columns))return;rendered=true;
+    var settings=payload.settings||{},dimensions=settings["graph.dimensions"]||[],metrics=settings["graph.metrics"]||[],display=payload.display;
+    var dimIndex=columnIndex(payload.columns,dimensions),metricIndexes=metrics.map(function(metric){return columnIndex(payload.columns,[metric]);}).filter(function(index){return index>=0;});
+    if(dimIndex<0)dimIndex=0;
+    if(!metricIndexes.length){metricIndexes=payload.columns.map(function(column,index){return {column:column,index:index};}).filter(function(entry){return entry.index!==dimIndex&&/number|integer|float|decimal|bigint/i.test(String(entry.column.base_type||entry.column.semantic_type||""));}).map(function(entry){return entry.index;});}
+    if(!metricIndexes.length){document.getElementById("status").textContent="No numeric series is available for this saved chart.";return;}
+    var xName=payload.columns[dimIndex].display_name||payload.columns[dimIndex].name||"Category";
+    var timeAxis=settings["graph.x_axis.scale"]==="timeseries";
+    var xValues=payload.rows.map(function(row){var value=row[dimIndex];return timeAxis&&typeof value==="string"?Date.parse(value):value;});
+    var secondDimIndex=display==="combo"&&dimensions.length>1?columnIndex(payload.columns,dimensions.slice(1,2)):-1;
+    var seriesSettings=settings.series_settings||{};
+    var groups=secondDimIndex>=0?Array.from(new Set(payload.rows.map(function(row){return String(row[secondDimIndex]??"");}))):[];
+    function makeSeries(index,group){
+      var column=payload.columns[index]||{}, metricName=column.display_name||column.name||"Value";
+      var seriesName=group===null?metricName:(metricIndexes.length>1?group+" · "+metricName:group);
+      var style=(settings.column_settings||{})[JSON.stringify(["name",column.name])]||{};
+      var scale=Number(style.scale)||1;
+      var selectedRows=group===null?payload.rows:payload.rows.filter(function(row){return String(row[secondDimIndex]??"")===group;});
+      var points=selectedRows.map(function(row){var rowIndex=payload.rows.indexOf(row),value=number(row[index]);return [xValues[rowIndex],value===null?null:value*scale];});
+      var savedSeries=group===null?{}:(seriesSettings[group]||{});
+      var seriesType=savedSeries.display|| (display==="bar"?"bar":"line");
+      var item={name:seriesName,type:seriesType==="area"?"line":seriesType,data:points,smooth:settings["graph.smooth"]===true,label:{show:settings["graph.show_values"]===true,position:"top"}};
+      if(display==="area")item.areaStyle={opacity:0.28};
+      if(seriesType==="area")item.areaStyle={opacity:0.28};
+      return item;
+    }
+    var series=groups.length?groups.flatMap(function(group){return metricIndexes.map(function(index){return makeSeries(index,group);});}):metricIndexes.map(function(index){return makeSeries(index,null);});
+    var firstColumn=payload.columns[metricIndexes[0]]||{}, firstStyle=(settings.column_settings||{})[JSON.stringify(["name",firstColumn.name])]||{};
+    var decimals=Number.isInteger(firstStyle.decimals)?firstStyle.decimals:0;
+    var formatter=function(value){return (firstStyle.prefix||"")+Number(value).toFixed(decimals)+(firstStyle.suffix||"");};
+    var option={animation:false,color:settings["graph.colors"],title:{text:payload.title,left:"center"},tooltip:{trigger:"axis",renderMode:"richText"},legend:{type:"scroll",top:32},grid:{left:56,right:24,top:76,bottom:56,containLabel:true},xAxis:{type:timeAxis?"time":"category",name:xName,data:timeAxis?undefined:xValues,axisLabel:{show:settings["graph.x_axis.labels_enabled"]!==false,hideOverlap:true}},yAxis:{type:"value",axisLabel:{show:settings["graph.y_axis.labels_enabled"]!==false,formatter:formatter}},series:series};
+    if(display==="pie"){
+      var categories=payload.rows.map(function(row){return String(row[dimIndex]??"");});
+      option={animation:false,title:{text:payload.title,left:"center"},tooltip:{trigger:"item",renderMode:"richText"},legend:{type:"scroll",bottom:0},series:[{type:"pie",radius:["0%","66%"],data:payload.rows.map(function(row,index){return {name:categories[index],value:number(row[metricIndexes[0]])};})}]};
+    }else if(!["area","line","bar","combo"].includes(display)){
+      document.getElementById("status").textContent="ECharts does not yet support the saved '"+String(display)+"' visualization type.";return;
+    }
+    document.getElementById("status").hidden=true;var element=document.getElementById("chart");element.hidden=false;chart=echarts.init(element);chart.setOption(option);window.addEventListener("resize",function(){if(chart)chart.resize();});
+    if(payload.truncated){var note=document.createElement("p");note.textContent="Showing the first "+payload.rows.length+" of "+payload.row_count+" rows.";document.body.appendChild(note);}
+    send({jsonrpc:"2.0",method:"ui/notifications/size-changed",params:{height:Math.max(400,element.scrollHeight)}});
+  }
+  function receiveResult(params){var metadata=params&&params._meta, payload=metadata&&metadata[KEY];render(payload);}
+  function fromHost(){var host=window.openai;if(host&&host.toolResponseMetadata)render(host.toolResponseMetadata[KEY]);}
+  window.addEventListener("message",function(event){if(event.source!==parent)return;var message=event.data;if(!message||message.jsonrpc!=="2.0")return;
+    if(message.id!==undefined&&!message.method){var entry=pending[message.id];if(entry){delete pending[message.id];message.error?entry.reject(message.error):entry.resolve(message.result);}return;}
+    if(message.method==="ui/notifications/tool-result")receiveResult(message.params);
+    else if(message.id!==undefined&&message.method)send({jsonrpc:"2.0",id:message.id,result:{}});
+  });
+  window.addEventListener("openai:set_globals",fromHost);
+  request("ui/initialize",{appInfo:{name:"ditra-echarts-saved-card",version:"1.0.0"},appCapabilities:{},protocolVersion:"2026-01-26"}).then(function(){send({jsonrpc:"2.0",method:"ui/notifications/initialized",params:{}});fromHost();}).catch(function(){document.getElementById("status").textContent="The chart renderer could not connect to ChatGPT.";});
+})();
+</script></body></html>
+""".replace("__INTEGRITY__", ECHARTS_CDN_INTEGRITY).replace("__META_KEY__", ECHARTS_CARD_META_KEY)

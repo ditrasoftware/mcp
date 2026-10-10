@@ -8,12 +8,13 @@ import json
 import os
 import re
 import secrets
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import httpx
 
 from fastmcp import FastMCP
+from fastmcp.apps.config import UI_EXTENSION_ID
 from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_context
 from fastmcp.server.middleware.middleware import Middleware
@@ -22,7 +23,7 @@ from fastmcp.server.providers.addressing import hashed_backend_name
 from fastmcp.resources.base import ResourceContent, ResourceResult
 from fastmcp.tools import ToolResult
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, FileResponse
 
 from .rest_client import LottomaticapssAuth, LottomaticapssRestClient
 from .metabase_client import MetabaseClient
@@ -33,13 +34,21 @@ from .card_embed import (
     CARD_EMBED_META_KEY,
     CARD_EMBED_MIME,
     CARD_EMBED_URI,
+    ECHARTS_CARD_HTML,
+    ECHARTS_CARD_META_KEY,
+    ECHARTS_CARD_RESOURCE_META,
+    ECHARTS_CARD_URI,
     card_embed_resource_meta,
     sign_card_embed_url,
 )
-from .visualization import repair_visualization_payload
+from .visualization import repair_visualization_payload, saved_chart_payload, saved_card_table_payload
 from .white_label import white_label_analytics_renderer
+from . import native_viewer
 from .maps import register_maps
 from .oauth import create_auth_provider
+from .gateway.connections import ConnectionPolicyMiddleware, separation_enabled
+from .gateway.connection_oauth import register_ditra_account_oauth
+from .gateway.proxy import retained_client_lifespan
 from .middleware import (
     TenantResolutionMiddleware,
     AuthEnforcementMiddleware,
@@ -408,9 +417,26 @@ def create_mcp() -> FastMCP:
     app_providers, local_app_registry = create_local_app_providers(client, settings)
 
     auth_provider = create_auth_provider()
+    if separation_enabled() and (auth_provider is None
+            or not os.getenv("LOTTOMATICAPSS_GATEWAY_REMOTE_AUTH_ENCRYPTION_KEY")
+            or not os.getenv("LOTTOMATICAPSS_GATEWAY_REMOTE_AUTH_STORE_PATH")):
+        raise ValueError("Connection separation requires master authentication and an encrypted credential store")
     mcp = FastMCP(
-        "Lottomaticapss MCP",
+        "Lottomatica PSS MCP",
+        lifespan=retained_client_lifespan,
         version=__version__,
+        instructions=(
+            "Lottomatica PSS MCP is the master business-context gateway for Lottomatica PSS. "
+            "Ditra Analytics is its branded analytics integration; other federated integrations "
+            "retain their native protocol contracts. Before procurement, KPI, visualization, or "
+            "federated workflows, read skill://lottomatica-pss/SKILL.md or call get_business_guidance "
+            "when resources or prompts are unavailable. For saved dashboard KPIs, use "
+            "answer_dashboard_kpi with the explicit period and source; do not substitute model counts. "
+            "For ad hoc supplier spending, use answer_kpi and report its source and filters. "
+            "Distinguish saved-chart embedding from automatic visualization, and tool acceptance "
+            "from confirmed rendering. Never bypass an authorization failure through a stronger "
+            "downstream credential or expose tokens to the model."
+        ),
         auth=auth_provider,
         cache_ttl=settings.cache_ttl,
         cache_scope=settings.cache_scope,
@@ -465,7 +491,7 @@ def create_mcp() -> FastMCP:
                         except Exception:
                             pass
             result = await call_next(context)
-            if name == "visualize_card_query" or (isinstance(name, str) and name.endswith("visualize_query")):
+            if name in {"visualize_card", "visualize_card_query"} or (isinstance(name, str) and name.endswith("visualize_query")):
                 repaired = repair_visualization_payload(getattr(result, "structured_content", None))
                 if repaired is not None:
                     return ToolResult(content=result.content, structured_content=repaired,
@@ -495,6 +521,19 @@ def create_mcp() -> FastMCP:
                     content = self._inject_ios_safari_tap_fix(content)
                     changed = changed or content != item.content
                 if is_analytics_mcp_app and is_html:
+                    if uri == native_viewer.NATIVE_VIEWER_URI and native_viewer.enabled():
+                        content = native_viewer.render_html(settings.metabase.site_url, str(auth_provider.base_url))
+                        meta = dict(meta or {})
+                        ui = dict(meta.get("ui") or {})
+                        csp = dict(ui.get("csp") or {})
+                        origin = str(auth_provider.base_url).rstrip("/")
+                        csp["resourceDomains"] = list(dict.fromkeys([*csp.get("resourceDomains", []), origin]))
+                        ui["csp"] = csp
+                        meta["ui"] = ui
+                        widget_csp = dict(meta.get("openai/widgetCSP") or {})
+                        widget_csp["resource_domains"] = list(dict.fromkeys([*widget_csp.get("resource_domains", []), origin]))
+                        meta["openai/widgetCSP"] = widget_csp
+                        changed = True
                     content = white_label_analytics_renderer(content)
                     changed = changed or content != item.content
                 if is_analytics_mcp_app:
@@ -578,6 +617,10 @@ def create_mcp() -> FastMCP:
 
     # 3. Auth enforcement (needs tenant context)
     mcp.add_middleware(AuthEnforcementMiddleware())
+    mcp.add_middleware(ConnectionPolicyMiddleware(settings.gateway.remotes))
+    ditra_account_manager = None
+    if separation_enabled():
+        ditra_account_manager = register_ditra_account_oauth(mcp, auth_provider, settings.gateway.remotes)
 
     # 4. Error normalization (catches all errors)
     mcp.add_middleware(ErrorNormalizationMiddleware())
@@ -613,6 +656,8 @@ def create_mcp() -> FastMCP:
 
     @mcp.custom_route("/admin/downstreams/ditra-analytics/status", methods=["GET"])
     async def analytics_connection_status(request: Request) -> JSONResponse:
+        if separation_enabled():
+            return JSONResponse({"error": "Legacy shared connection management is disabled"}, status_code=403)
         if not _basic_admin_authorized(request):
             return _admin_challenge()
         if analytics_remote is None:
@@ -630,6 +675,8 @@ def create_mcp() -> FastMCP:
 
     @mcp.custom_route("/admin/downstreams/ditra-analytics/connect", methods=["GET"])
     async def connect_ditra_analytics(request: Request) -> RedirectResponse | PlainTextResponse:
+        if separation_enabled():
+            return PlainTextResponse("Legacy shared connection management is disabled", status_code=403)
         if not _basic_admin_authorized(request):
             return _admin_challenge()
         callback_url = f"{(os.getenv('LOTTOMATICAPSS_MCP_BASE_URL') or '').rstrip('/')}{downstream_callback}"
@@ -673,6 +720,8 @@ def create_mcp() -> FastMCP:
 
     @mcp.custom_route(downstream_callback, methods=["GET"])
     async def complete_ditra_analytics_connection(request: Request) -> HTMLResponse:
+        if separation_enabled():
+            return HTMLResponse("Legacy shared connection management is disabled", status_code=403)
         state = request.query_params.get("state") or ""
         code = request.query_params.get("code") or ""
         pending = oauth_state.pop(state, None)
@@ -792,14 +841,23 @@ def create_mcp() -> FastMCP:
     async def visualize_card_query(card_id: int) -> mt.CallToolResult:
         """Render a saved card's query in the automatic Ditra Analytics chart viewer.
 
-        The chart type is chosen automatically from the results, so pie, area, combo and other
-        saved visualizations are not preserved. Prefer visualize_card; use this only when the card
-        is not published for embedding.
+        When the bundled saved viewer is enabled, supported saved display and visualization settings
+        are supplied to the native SDK and its display is locked. Otherwise chart type is chosen
+        automatically and saved styles are not preserved. visualize_card uses this same native path.
+        Prefer this native viewer for bar, line, and table charts. For saved area, pie or combo
+        fidelity, ECharts is an explicit alternative, not an automatic fallback. This call prepares one widget; do not
+        render its query again through visualize_query.
         """
         card = await metabase_client.get_card(card_id)
         payload = card.data
         if not isinstance(payload, dict):
             raise ValueError(f"Saved card {card_id} returned invalid metadata")
+        if native_viewer.enabled():
+            saved_metadata = (await metabase_client.api_get_card(card_id)).data
+            if not isinstance(saved_metadata, dict):
+                raise ValueError(f"Saved card {card_id} returned invalid saved visualization metadata")
+            payload = {**payload, **{key: saved_metadata.get(key)
+                                    for key in ("display", "visualization_settings", "name", "result_metadata")}}
         query = payload.get("query_json") or payload.get("dataset_query")
         if not isinstance(query, dict):
             raise ValueError(f"Saved card {card_id} does not contain an MBQL query")
@@ -810,11 +868,33 @@ def create_mcp() -> FastMCP:
             query=query,
             prompt=f"Visualize saved card {card_id}.",
         )
+        structured = visualized.structured_content
+        saved_style = native_viewer.enabled() and not visualized.is_error
+        if saved_style:
+            if not isinstance(structured, dict) or not isinstance(structured.get("query"), str):
+                raise ValueError("Native saved viewer did not receive a valid query payload")
+            structured = {**structured, "saved_visualization": native_viewer.saved_visualization(payload)}
+        rendering_meta = dict(visualized.meta or {})
+        rendering_meta["lottomaticapss/rendering"] = {
+            "card_id": card_id, "renderer": "native-mcp", "status": "failed" if visualized.is_error else "prepared",
+            "saved_display": payload.get("display"), "saved_settings_preserved": saved_style,
+            "browser_rendering_verified": False,
+        }
+        status_text = (
+            f"Native visualization preparation failed for card {card_id}."
+            if visualized.is_error else
+            f"Prepared one saved {payload.get('display')} native widget for card {card_id}, retaining saved settings. "
+            "Browser rendering has not been verified. No ECharts fallback was invoked."
+            if saved_style else
+            f"Prepared one native automatic-viewer widget for card {card_id}. "
+            f"Saved display: {payload.get('display')}. Saved visualization settings are not preserved; "
+            "browser rendering has not been verified. No ECharts fallback was invoked."
+        )
         return mt.CallToolResult(
-            content=visualized.content,
-            structured_content=visualized.structured_content,
+            content=[*visualized.content, mt.TextContent(type="text", text=status_text)],
+            structured_content=structured,
             is_error=visualized.is_error,
-            meta=visualized.meta,
+            meta=rendering_meta,
         )
 
     @mcp.resource(
@@ -827,7 +907,52 @@ def create_mcp() -> FastMCP:
         """MCP Apps view that renders a published saved card with its saved visualization."""
         return CARD_EMBED_HTML
 
+    @mcp.resource(
+        ECHARTS_CARD_URI,
+        name="saved_card_echarts_view",
+        mime_type=CARD_EMBED_MIME,
+        meta=ECHARTS_CARD_RESOURCE_META,
+    )
+    def saved_card_echarts_view() -> str:
+        """Authenticated ECharts fallback for supported saved chart styles."""
+        return ECHARTS_CARD_HTML
+
+    @mcp.tool(
+        name="visualize_card_echarts",
+        meta={"ui": {"resourceUri": ECHARTS_CARD_URI}},
+        annotations={"readOnlyHint": True, "destructiveHint": False,
+                     "idempotentHint": True, "openWorldHint": True},
+    )
+    async def visualize_card_echarts(card_id: int) -> mt.CallToolResult:
+        """Render a saved area, pie, combo, or requested chart with ECharts.
+
+        Executes the saved question through the current Ditra Analytics connection,
+        so the connected account's permissions and row-level policies still apply.
+        Use this when native automatic rendering cannot preserve the requested saved
+        visualization or when the user explicitly requests ECharts. One call creates
+        one chart widget: do not call another visualization tool for the same card
+        unless the user explicitly asks to compare or refresh it.
+        """
+        card_result = await metabase_client.api_get_card(card_id)
+        card = card_result.data
+        if not isinstance(card, dict):
+            raise ValueError(f"Saved card {card_id} returned invalid metadata")
+        if card.get("display") not in {"area", "pie", "combo", "bar", "line"}:
+            raise ValueError(f"ECharts does not support saved display {card.get('display')!r}")
+        query_result = await metabase_client.api_run_card_query(card_id)
+        chart = saved_chart_payload(card, query_result.data)
+        visible = {key: chart[key] for key in ("card_id", "title", "display", "row_count", "truncated")}
+        return mt.CallToolResult(
+            content=[mt.TextContent(type="text", text=(
+                f"Rendering saved {chart['display']} chart '{chart['title']}' with ECharts. "
+                "The data was queried under the connected Ditra Analytics account."))],
+            structured_content=visible,
+            meta={ECHARTS_CARD_META_KEY: chart},
+        )
+
     def _signed_card_meta(card_id: int) -> dict[str, Any]:
+        if separation_enabled():
+            raise PermissionError("Shared guest-embedding credentials are unavailable in connection mode")
         url, expires_at = sign_card_embed_url(
             settings.metabase.site_url,
             settings.metabase.embedding_secret_key or "",
@@ -838,23 +963,55 @@ def create_mcp() -> FastMCP:
 
     @mcp.tool(
         name="visualize_card",
-        meta={"ui": {"resourceUri": CARD_EMBED_URI}, "openai/outputTemplate": CARD_EMBED_URI,
+        meta={"ui": {"resourceUri": "ui://ditra_analytics/metabase/visualize-query.html" if separation_enabled() else CARD_EMBED_URI},
+              "openai/outputTemplate": "ui://ditra_analytics/metabase/visualize-query.html" if separation_enabled() else CARD_EMBED_URI,
               "openai/widgetAccessible": True},
     )
-    async def visualize_card(card_id: int) -> mt.CallToolResult:
-        """Show a saved card exactly as saved in Ditra Analytics (chart type, colors, labels, settings).
+    async def visualize_card(card_id: int, output: Literal["native", "table", "auto"] = "native") -> mt.CallToolResult:
+        """Prepare one native Ditra Analytics visualization for a saved card.
 
-        Works for cards published for embedding. If the card is not published, the result says so;
-        then call visualize_card_query for an automatic chart of the same data.
+        In delegated connection mode, uses the connected account's native viewer. The bundled saved
+        viewer retains supported saved settings; the legacy viewer chooses chart type automatically.
+        There is no automatic ECharts fallback. One call prepares one widget; do not call
+        another renderer unless explicitly requested. Preparation does not verify browser rendering.
+        Outside connection mode, published guest embeds retain the saved visualization settings.
+        output='table' returns bounded saved-question data without UI credentials for non-app hosts.
+        output='auto' selects native only when the client advertises MCP Apps support; otherwise table.
+        The default remains native for compatibility with existing clients.
         """
+        context = _ctx_or_current(None)
+        table_requested = output == "table" or (
+            output == "auto" and (context is None or not context.client_supports_extension(UI_EXTENSION_ID))
+        )
+        if table_requested:
+            card = (await metabase_client.api_get_card(card_id)).data
+            result = (await metabase_client.api_run_card_query(card_id)).data
+            table = saved_card_table_payload(card, result)
+            return mt.CallToolResult(
+                content=[mt.TextContent(type="text", text=(
+                    f"Returned table data for saved card {card_id}; no chart widget was prepared. "
+                    "Data is bounded to 50 rows, 30 columns, and 160 characters per text cell.\n"
+                    + json.dumps(table, ensure_ascii=True)))],
+                structured_content=table,
+                meta={"lottomaticapss/rendering": {
+                    "card_id": card_id, "renderer": "table", "status": "data-returned",
+                    "saved_display": table["saved_display"], "saved_settings_preserved": False,
+                    "browser_rendering_verified": False,
+                }},
+            )
+        if separation_enabled():
+            return await visualize_card_query(card_id)
         card = (await metabase_client.api_get_card(card_id)).data
         if not isinstance(card, dict):
             raise ValueError(f"Saved card {card_id} returned invalid metadata")
         name, display = card.get("name") or f"Card {card_id}", card.get("display")
-        published = bool(card.get("enable_embedding")) and bool(settings.metabase.embedding_secret_key)
+        published = (bool(card.get("enable_embedding")) and bool(settings.metabase.embedding_secret_key)
+                 and not separation_enabled())
         structured = {"card_id": card_id, "name": name, "display": display, "published": published}
         if not published:
             reason = (
+                "guest embedding does not enforce the selected user's downstream permissions"
+                if separation_enabled() else
                 "embedding is not configured on the gateway"
                 if not settings.metabase.embedding_secret_key
                 else "the card is not published for embedding in Ditra Analytics"
@@ -879,6 +1036,8 @@ def create_mcp() -> FastMCP:
     )
     async def saved_card_embed_url(card_id: int) -> mt.CallToolResult:
         """Issue a fresh short-lived embed link for the saved-card view."""
+        if separation_enabled():
+            raise PermissionError("Shared guest-embedding credentials are unavailable in connection mode")
         if not settings.metabase.embedding_secret_key:
             raise ValueError("Saved-card embedding is not configured")
         return mt.CallToolResult(
@@ -1001,6 +1160,7 @@ def create_mcp() -> FastMCP:
         _apply_default_auth=_apply_default_auth,
         _coerce_positive_int=_coerce_positive_int,
         metabase_client=metabase_client,
+        connection_setup=ditra_account_manager,
     )
 
     @mcp.tool()
@@ -1039,6 +1199,19 @@ def create_mcp() -> FastMCP:
             },
         }
 
+    if native_viewer.enabled():
+        if auth_provider is None or not native_viewer.ASSET_ROOT.is_dir():
+            raise ValueError("Native saved viewer requires master authentication and bundled assets")
+
+        @mcp.custom_route("/native-viewer/assets/{name:path}", methods=["GET"])
+        async def native_viewer_asset(request: Request):
+            try:
+                path = native_viewer.asset_path(request.path_params["name"])
+            except FileNotFoundError:
+                return PlainTextResponse("Not found", status_code=404)
+            return FileResponse(path, headers={"Cache-Control": "public, max-age=31536000, immutable",
+                                               "Access-Control-Allow-Origin": "*"})
+
     return mcp
 
 
@@ -1063,7 +1236,9 @@ def main() -> None:
     args = parser.parse_args()
 
     mcp = create_mcp()
-    mcp.run(transport=args.transport, stateless_http=args.stateless_http)
+    from .middleware.observability import access_log_config
+    transport_options = {} if args.transport == "stdio" else {"uvicorn_config": {"log_config": access_log_config()}}
+    mcp.run(transport=args.transport, stateless_http=args.stateless_http, **transport_options)
 
 
 if __name__ == "__main__":

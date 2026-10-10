@@ -16,7 +16,7 @@ RUN apt-get update \
 # starlette/httpx versions are left to fastmcp's own dependency resolution
 # to avoid conflicting with fastmcp-slim's starlette>=1.0.1 requirement.
 RUN pip install --no-cache-dir \
-    "fastmcp[apps]==4.0.3" \
+    "fastmcp[apps]==4.0.11" \
     "prefab-ui==0.20.2" \
     "httpx==0.27.0"
 
